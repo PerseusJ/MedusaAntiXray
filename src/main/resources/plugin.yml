@@ -1,0 +1,22 @@
+main: me.perseusj.medusaantixray.MedusaAntiXray
+version: 1.0.0-SNAPSHOT
+name: MedusaAntiXray
+author: PerseusJ
+api-version: 1.20
+
+commands:
+  medusa:
+    description: Medusa Anti-Xray management command
+    usage: /medusa <reload|check>
+    permission: medusa.admin
+
+permissions:
+  medusa.admin:
+    description: Access to /medusa management commands
+    default: op
+  medusa.staff:
+    description: Receive Medusa X-ray detection alerts
+    default: op
+  medusa.bypass:
+    description: Exempt from Medusa detection (for trusted staff)
+    default: false
