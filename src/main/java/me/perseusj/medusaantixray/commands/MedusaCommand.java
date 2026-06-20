@@ -14,10 +14,18 @@ import java.util.List;
 
 public class MedusaCommand implements CommandExecutor, TabCompleter {
 
+    private final ConfigManager config;
+    private final DataManager dataManager;
+
+    public MedusaCommand(ConfigManager config, DataManager dataManager) {
+        this.config = config;
+        this.dataManager = dataManager;
+    }
+
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!sender.hasPermission("medusa.admin")) {
-            sender.sendMessage(Utils.colorize(ConfigManager.getInstance().getNoPermissionMessage()));
+            sender.sendMessage(Utils.colorize(config.getNoPermissionMessage()));
             return true;
         }
 
@@ -27,21 +35,21 @@ public class MedusaCommand implements CommandExecutor, TabCompleter {
         }
 
         if (args[0].equalsIgnoreCase("reload")) {
-            ConfigManager.getInstance().reload();
-            sender.sendMessage(Utils.colorize(ConfigManager.getInstance().getReloadSuccessMessage()));
+            config.reload();
+            sender.sendMessage(Utils.colorize(config.getReloadSuccessMessage()));
             return true;
         }
 
         if (args[0].equalsIgnoreCase("check")) {
             if (args.length < 2) {
-                sender.sendMessage(Utils.colorize(ConfigManager.getInstance().getUsageCheckMessage()));
+                sender.sendMessage(Utils.colorize(config.getUsageCheckMessage()));
                 return true;
             }
 
             String targetName = args[1];
             PlayerData targetData = null;
 
-            for (PlayerData data : DataManager.getInstance().getAllEntries()) {
+            for (PlayerData data : dataManager.getAllEntries()) {
                 if (data.getPlayerName().equalsIgnoreCase(targetName)) {
                     targetData = data;
                     break;
@@ -49,22 +57,21 @@ public class MedusaCommand implements CommandExecutor, TabCompleter {
             }
 
             if (targetData == null) {
-                String notFound = ConfigManager.getInstance().getPlayerNotFoundMessage().replace("{player}", targetName);
+                String notFound = config.getPlayerNotFoundMessage().replace("{player}", targetName);
                 sender.sendMessage(Utils.colorize(notFound));
                 return true;
             }
 
-            // Ensure window is up to date for check
-            long cutoff = System.currentTimeMillis() - (ConfigManager.getInstance().getWindowMinutes() * 60_000L);
+            long cutoff = System.currentTimeMillis() - (config.getWindowMinutes() * 60_000L);
             targetData.purgeExpired(cutoff);
 
-            String checkMessage = ConfigManager.getInstance().getCheckMessage();
+            String checkMessage = config.getCheckMessage();
             checkMessage = checkMessage
                     .replace("{player}", targetData.getPlayerName())
                     .replace("{score}", String.format("%.2f", targetData.calculateScore()))
                     .replace("{total}", String.valueOf(targetData.getTotalBlocks()))
                     .replace("{ratio}", String.format("%.1f", targetData.calculateRatio() * 100))
-                    .replace("{window}", String.valueOf(ConfigManager.getInstance().getWindowMinutes()));
+                    .replace("{window}", String.valueOf(config.getWindowMinutes()));
 
             sender.sendMessage(Utils.colorize(checkMessage));
             return true;
@@ -83,7 +90,7 @@ public class MedusaCommand implements CommandExecutor, TabCompleter {
             if ("reload".startsWith(args[0].toLowerCase())) completions.add("reload");
             if ("check".startsWith(args[0].toLowerCase())) completions.add("check");
         } else if (args.length == 2 && args[0].equalsIgnoreCase("check")) {
-            for (PlayerData data : DataManager.getInstance().getAllEntries()) {
+            for (PlayerData data : dataManager.getAllEntries()) {
                 if (data.getPlayerName().toLowerCase().startsWith(args[1].toLowerCase())) {
                     completions.add(data.getPlayerName());
                 }

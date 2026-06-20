@@ -6,17 +6,17 @@
 detection:
   # Minimum blocks mined before ratio is evaluated (prevents early false flags)
   min-sample-size: 64
-  
+
   # Ratio of (weighted suspicious ore score / total blocks) to trigger alert
   # 0.08 = ~8% of mined blocks are high-value, well above natural ~1-2%
   alert-threshold: 0.08
-  
+
   # Sliding window duration in minutes
   window-minutes: 30
-  
+
   # Weight applied to ores that had NO exposed face (fully hidden = suspicious)
   hidden-ore-weight: 1.0
-  
+
   # Weight applied to ores that had at least one face exposed to air (cave mining)
   exposed-ore-weight: 0.25
 
@@ -62,16 +62,16 @@ worlds:
 alerts:
   # Seconds between repeated alerts for the same player (prevents chat spam)
   cooldown-seconds: 60
-  
+
   # Permission required to receive alerts
   staff-permission: "medusa.staff"
-  
+
   # Message prefix (supports & color codes and hex #RRGGBB)
   prefix: "&8[&4Medusa&8]&r"
-  
+
   # Alert message placeholders: {player}, {ratio}, {score}, {total}
   alert-message: "{prefix} &c⚠ {player} &7may be X-raying! &cRatio: &f{ratio}% &7({score} pts / {total} blocks)"
-  
+
   # Message sent to /medusa check executor
   check-message: "&7Player &f{player} &7| Score: &c{score} &7| Total: &f{total} &7| Ratio: &c{ratio}% &7| Window: &f{window}m"
 
@@ -80,3 +80,21 @@ messages:
   reload-success: "&aConfiguration reloaded successfully."
   player-not-found: "&cPlayer &f{player} &cnot found or has no data."
   usage-check: "&cUsage: /medusa check <player>"
+
+database:
+  # Database type: sqlite or mysql
+  # If mysql is used, the MySQL JDBC driver must be available on the server classpath.
+  type: sqlite
+
+  sqlite:
+    file: medusa_antixray.db
+
+  mysql:
+    host: localhost
+    port: 3306
+    database: medusa_antixray
+    username: root
+    password: ""
+
+  # Auto-save interval in minutes (0 = only save on player quit / server stop)
+  save-interval-minutes: 5

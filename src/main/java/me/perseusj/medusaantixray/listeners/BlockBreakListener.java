@@ -14,6 +14,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.List;
 
@@ -23,9 +24,21 @@ public class BlockBreakListener implements Listener {
         OVERWORLD, NETHER, IGNORED
     }
 
-    private final BlockFace[] FACES = {
+    private static final BlockFace[] FACES = {
             BlockFace.UP, BlockFace.DOWN, BlockFace.NORTH, BlockFace.SOUTH, BlockFace.EAST, BlockFace.WEST
     };
+
+    private final JavaPlugin plugin;
+    private final ConfigManager config;
+    private final DataManager dataManager;
+    private final AlertManager alertManager;
+
+    public BlockBreakListener(JavaPlugin plugin, ConfigManager config, DataManager dataManager, AlertManager alertManager) {
+        this.plugin = plugin;
+        this.config = config;
+        this.dataManager = dataManager;
+        this.alertManager = alertManager;
+    }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onBlockBreak(BlockBreakEvent event) {
@@ -34,9 +47,7 @@ public class BlockBreakListener implements Listener {
         if (player.getGameMode() != GameMode.SURVIVAL) return;
         if (player.hasPermission("medusa.bypass")) return;
 
-        ConfigManager config = ConfigManager.getInstance();
-        WorldType worldType = classifyWorld(player.getWorld().getName(), config);
-        
+        WorldType worldType = classifyWorld(player.getWorld().getName());
         if (worldType == WorldType.IGNORED) return;
 
         Block block = event.getBlock();
@@ -48,44 +59,52 @@ public class BlockBreakListener implements Listener {
         if (worldType == WorldType.OVERWORLD) {
             isValuable = config.getOverworldOres().contains(materialName);
             isFiller = config.getOverworldFillers().contains(materialName);
-        } else if (worldType == WorldType.NETHER) {
+        } else {
             isValuable = config.getNetherOres().contains(materialName);
             isFiller = config.getNetherFillers().contains(materialName);
         }
 
         if (!isValuable && !isFiller) return;
 
-        double weight = 0;
-        if (isValuable) {
-            boolean exposed = isBlockExposed(block);
-            weight = exposed ? config.getExposedOreWeight() : config.getHiddenOreWeight();
-        }
+        Block finalBlock = block;
+        boolean finalIsValuable = isValuable;
 
-        PlayerData data = DataManager.getInstance().getEntry(player.getUniqueId());
-        if (data == null) {
-            // Player might have bypassed on join but lost permission, or reloaded
-            DataManager.getInstance().createEntry(player.getUniqueId(), player.getName());
-            data = DataManager.getInstance().getEntry(player.getUniqueId());
-        }
+        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
+            double weight = 0;
+            if (finalIsValuable) {
+                boolean exposed = isBlockExposed(finalBlock);
+                weight = exposed ? config.getExposedOreWeight() : config.getHiddenOreWeight();
+            }
 
-        long now = System.currentTimeMillis();
-        long cutoff = now - (config.getWindowMinutes() * 60_000L);
+            PlayerData data = dataManager.getEntry(player.getUniqueId());
+            if (data == null) {
+                dataManager.createEntry(player.getUniqueId(), player.getName());
+                data = dataManager.getEntry(player.getUniqueId());
+            }
 
-        data.purgeExpired(cutoff);
-        data.addEvent(new MineEvent(now, isValuable, weight));
+            long now = System.currentTimeMillis();
+            long cutoff = now - (config.getWindowMinutes() * 60_000L);
 
-        if (data.getTotalBlocks() < config.getMinSampleSize()) return;
+            data.purgeExpired(cutoff);
+            data.addEvent(new MineEvent(now, finalIsValuable, weight));
 
-        double ratio = data.calculateRatio();
-        if (ratio < config.getAlertThreshold()) return;
+            if (data.getTotalBlocks() < config.getMinSampleSize()) return;
 
-        if ((now - data.getLastAlertTimestamp()) < (config.getCooldownSeconds() * 1000L)) return;
+            long cooldownMs = config.getCooldownSeconds() * 1000L;
+            double ratio = data.calculateRatio();
+            if (ratio < config.getAlertThreshold()) return;
+            if (!data.shouldAlert(now, cooldownMs)) return;
 
-        data.setLastAlertTimestamp(now);
-        AlertManager.getInstance().dispatch(player, ratio, data.calculateScore(), data.getTotalBlocks());
+            double score = data.calculateScore();
+            int total = data.getTotalBlocks();
+            String playerName = player.getName();
+
+            plugin.getServer().getScheduler().runTask(plugin, () ->
+                    alertManager.dispatch(playerName, ratio, score, total));
+        });
     }
 
-    private WorldType classifyWorld(String worldName, ConfigManager config) {
+    private WorldType classifyWorld(String worldName) {
         if (config.isOverworldEnabled() && config.getOverworldNames().contains(worldName)) {
             return WorldType.OVERWORLD;
         }

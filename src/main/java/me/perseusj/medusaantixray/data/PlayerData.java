@@ -1,7 +1,10 @@
 package me.perseusj.medusaantixray.data;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Deque;
+import java.util.List;
 import java.util.UUID;
 
 public class PlayerData {
@@ -9,12 +12,16 @@ public class PlayerData {
     private final String playerName;
     private final Deque<MineEvent> eventWindow;
     private long lastAlertTimestamp;
+    private double currentScore;
+    private int currentBlocks;
 
     public PlayerData(UUID playerUuid, String playerName) {
         this.playerUuid = playerUuid;
         this.playerName = playerName;
         this.eventWindow = new ArrayDeque<>();
         this.lastAlertTimestamp = 0;
+        this.currentScore = 0;
+        this.currentBlocks = 0;
     }
 
     public UUID getPlayerUuid() {
@@ -25,43 +32,76 @@ public class PlayerData {
         return playerName;
     }
 
-    public long getLastAlertTimestamp() {
+    public synchronized long getLastAlertTimestamp() {
         return lastAlertTimestamp;
     }
 
-    public void setLastAlertTimestamp(long lastAlertTimestamp) {
+    public synchronized void setLastAlertTimestamp(long lastAlertTimestamp) {
         this.lastAlertTimestamp = lastAlertTimestamp;
     }
 
-    public void addEvent(MineEvent event) {
-        this.eventWindow.addLast(event);
-    }
-
-    public void purgeExpired(long cutoff) {
-        while (!eventWindow.isEmpty() && eventWindow.peekFirst().timestamp() < cutoff) {
-            eventWindow.pollFirst();
+    public synchronized void addEvent(MineEvent event) {
+        eventWindow.addLast(event);
+        currentBlocks++;
+        if (event.isValuable()) {
+            currentScore += event.weight();
         }
     }
 
-    public int getTotalBlocks() {
-        return eventWindow.size();
-    }
-
-    public double calculateScore() {
-        double score = 0;
-        for (MineEvent event : eventWindow) {
-            if (event.isValuable()) {
-                score += event.weight();
+    public synchronized void purgeExpired(long cutoff) {
+        while (!eventWindow.isEmpty() && eventWindow.peekFirst().timestamp() < cutoff) {
+            MineEvent removed = eventWindow.pollFirst();
+            currentBlocks--;
+            if (removed.isValuable()) {
+                currentScore -= removed.weight();
             }
         }
-        return score;
     }
 
-    public double calculateRatio() {
-        int total = getTotalBlocks();
-        if (total == 0) {
+    public synchronized void mergeLoadedEvents(List<MineEvent> loaded) {
+        if (loaded == null || loaded.isEmpty()) {
+            return;
+        }
+        List<MineEvent> combined = new ArrayList<>(eventWindow.size() + loaded.size());
+        combined.addAll(loaded);
+        combined.addAll(eventWindow);
+        combined.sort(Comparator.comparingLong(MineEvent::timestamp));
+        eventWindow.clear();
+        currentScore = 0;
+        currentBlocks = 0;
+        for (MineEvent event : combined) {
+            eventWindow.addLast(event);
+            currentBlocks++;
+            if (event.isValuable()) {
+                currentScore += event.weight();
+            }
+        }
+    }
+
+    public synchronized int getTotalBlocks() {
+        return currentBlocks;
+    }
+
+    public synchronized double calculateScore() {
+        return currentScore;
+    }
+
+    public synchronized double calculateRatio() {
+        if (currentBlocks == 0) {
             return 0;
         }
-        return calculateScore() / total;
+        return currentScore / currentBlocks;
+    }
+
+    public synchronized List<MineEvent> snapshotEvents() {
+        return new ArrayList<>(eventWindow);
+    }
+
+    public synchronized boolean shouldAlert(long now, long cooldownMillis) {
+        if (lastAlertTimestamp != 0 && (now - lastAlertTimestamp) < cooldownMillis) {
+            return false;
+        }
+        lastAlertTimestamp = now;
+        return true;
     }
 }

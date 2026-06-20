@@ -5,33 +5,23 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 
 public class AlertManager {
-    private static AlertManager instance;
+    private final ConfigManager config;
 
-    private AlertManager() {}
-
-    public static void initialize() {
-        if (instance == null) {
-            instance = new AlertManager();
-        }
+    public AlertManager(ConfigManager config) {
+        this.config = config;
     }
 
-    public static AlertManager getInstance() {
-        return instance;
-    }
-
-    public void dispatch(Player suspect, double ratio, double score, int totalBlocks) {
-        ConfigManager config = ConfigManager.getInstance();
-        
+    public void dispatch(String playerName, double ratio, double score, int totalBlocks) {
         String template = config.getAlertMessage();
         String prefix = config.getPrefix();
-        
+
         String message = template
                 .replace("{prefix}", prefix)
-                .replace("{player}", suspect.getName())
+                .replace("{player}", playerName)
                 .replace("{ratio}", String.format("%.1f", ratio * 100))
                 .replace("{score}", String.format("%.2f", score))
                 .replace("{total}", String.valueOf(totalBlocks));
-                
+
         String coloredMessage = Utils.colorize(message);
         String permission = config.getStaffPermission();
 

@@ -6,23 +6,12 @@ import me.perseusj.medusaantixray.MedusaAntiXray;
 import java.util.List;
 
 public class ConfigManager {
-    private static ConfigManager instance;
     private final MedusaAntiXray plugin;
     private FileConfiguration config;
 
-    private ConfigManager(MedusaAntiXray plugin) {
+    public ConfigManager(MedusaAntiXray plugin) {
         this.plugin = plugin;
         this.config = plugin.getConfig();
-    }
-
-    public static void initialize(MedusaAntiXray plugin) {
-        if (instance == null) {
-            instance = new ConfigManager(plugin);
-        }
-    }
-
-    public static ConfigManager getInstance() {
-        return instance;
     }
 
     public void reload() {
@@ -61,4 +50,14 @@ public class ConfigManager {
     public String getReloadSuccessMessage() { return config.getString("messages.reload-success", "&aConfiguration reloaded successfully."); }
     public String getPlayerNotFoundMessage() { return config.getString("messages.player-not-found", "&cPlayer &f{player} &cnot found or has no data."); }
     public String getUsageCheckMessage() { return config.getString("messages.usage-check", "&cUsage: /medusa check <player>"); }
+
+    // Database settings
+    public String getDatabaseType() { return config.getString("database.type", "sqlite"); }
+    public String getSqliteFile() { return config.getString("database.sqlite.file", "medusa_antixray.db"); }
+    public String getMysqlHost() { return config.getString("database.mysql.host", "localhost"); }
+    public int getMysqlPort() { return config.getInt("database.mysql.port", 3306); }
+    public String getMysqlDatabase() { return config.getString("database.mysql.database", "medusa_antixray"); }
+    public String getMysqlUsername() { return config.getString("database.mysql.username", "root"); }
+    public String getMysqlPassword() { return config.getString("database.mysql.password", ""); }
+    public int getSaveIntervalMinutes() { return config.getInt("database.save-interval-minutes", 5); }
 }

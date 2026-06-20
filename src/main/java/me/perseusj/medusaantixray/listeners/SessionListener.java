@@ -9,17 +9,23 @@ import org.bukkit.event.player.PlayerQuitEvent;
 
 public class SessionListener implements Listener {
 
+    private final DataManager dataManager;
+
+    public SessionListener(DataManager dataManager) {
+        this.dataManager = dataManager;
+    }
+
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
         if (player.hasPermission("medusa.bypass")) {
             return;
         }
-        DataManager.getInstance().createEntry(player.getUniqueId(), player.getName());
+        dataManager.loadOrCreateAsync(player.getUniqueId(), player.getName());
     }
 
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
-        DataManager.getInstance().removeEntry(event.getPlayer().getUniqueId());
+        dataManager.saveAndRemoveAsync(event.getPlayer().getUniqueId());
     }
 }
