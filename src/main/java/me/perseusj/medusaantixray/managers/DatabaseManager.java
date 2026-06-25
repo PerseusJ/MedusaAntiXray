@@ -17,6 +17,7 @@ import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.logging.Level;
 
@@ -37,11 +38,20 @@ public class DatabaseManager {
     private static final String INSERT_EVENT =
             "INSERT INTO medusa_events (uuid, player_name, timestamp, is_valuable, weight) VALUES (?,?,?,?,?)";
 
+    // A3: Purge rows older than a given cutoff timestamp across all players.
+    private static final String DELETE_EXPIRED_GLOBAL =
+            "DELETE FROM medusa_events WHERE timestamp < ?";
+
     private final MedusaAntiXray plugin;
     private final ConfigManager config;
     private final ExecutorService executor;
     private HikariDataSource dataSource;
-    private boolean available;
+    private volatile boolean available;
+
+    // A5: Throttle repeated failure log messages to once per retry cycle.
+    private volatile long lastFailureLoggedAt = 0;
+    // A5: Count saves dropped while the database was unavailable.
+    private final AtomicInteger droppedSaves = new AtomicInteger(0);
 
     public DatabaseManager(MedusaAntiXray plugin, ConfigManager config) {
         this.plugin = plugin;
@@ -65,10 +75,46 @@ public class DatabaseManager {
             createSchema();
             plugin.getLogger().info("Database initialized (" + config.getDatabaseType() + ").");
         } catch (Exception e) {
-            plugin.getLogger().log(Level.SEVERE, "Failed to initialize database; falling back to memory-only mode.", e);
+            plugin.getLogger().log(Level.SEVERE,
+                    "Failed to initialize database; falling back to memory-only mode. Will retry in "
+                    + config.getRetryIntervalSeconds() + "s.", e);
             this.available = false;
             this.dataSource = null;
         }
+    }
+
+    /**
+     * A5: Attempts to reconnect to the database. Should be called periodically from a scheduler
+     * when {@link #isAvailable()} returns {@code false}.
+     * Logs at INFO on success; throttles failure logs to avoid spam.
+     */
+    public void retryConnect() {
+        if (available) {
+            return; // Already connected; nothing to do.
+        }
+        try {
+            if (!plugin.getDataFolder().exists() && !plugin.getDataFolder().mkdirs()) {
+                logFailureThrottled("Could not create plugin data folder during reconnect attempt.");
+                return;
+            }
+            HikariDataSource newSource = buildDataSource();
+            createSchemaWith(newSource);
+            // Replace the data source atomically and mark available.
+            HikariDataSource old = this.dataSource;
+            this.dataSource = newSource;
+            this.available = true;
+            if (old != null) {
+                old.close();
+            }
+            plugin.getLogger().info("[Medusa] Database reconnected — resuming persistence.");
+        } catch (Exception e) {
+            logFailureThrottled("[Medusa] Database reconnect attempt failed: " + e.getMessage());
+        }
+    }
+
+    /** A5: Returns the number of save operations dropped since the last successful connection. */
+    public int getDroppedSaveCount() {
+        return droppedSaves.get();
     }
 
     public boolean isAvailable() {
@@ -100,7 +146,11 @@ public class DatabaseManager {
     }
 
     private void createSchema() throws SQLException {
-        try (Connection connection = dataSource.getConnection();
+        createSchemaWith(this.dataSource);
+    }
+
+    private void createSchemaWith(HikariDataSource source) throws SQLException {
+        try (Connection connection = source.getConnection();
              Statement statement = connection.createStatement()) {
             statement.executeUpdate(CREATE_TABLE);
             statement.executeUpdate(CREATE_INDEX);
@@ -123,6 +173,8 @@ public class DatabaseManager {
 
     public void saveAsync(PlayerData data, Runnable onComplete) {
         if (!available) {
+            // A5: Count dropped saves so they can be reported at shutdown.
+            droppedSaves.incrementAndGet();
             if (onComplete != null) {
                 onComplete.run();
             }
@@ -137,6 +189,31 @@ public class DatabaseManager {
                 if (onComplete != null) {
                     onComplete.run();
                 }
+            }
+        });
+    }
+
+    /**
+     * A3: Deletes all rows from {@code medusa_events} whose timestamp is older than
+     * {@code cutoffMs}. Intended to be scheduled asynchronously once per day.
+     *
+     * @param cutoffMs epoch-millis threshold; rows strictly older than this are deleted.
+     */
+    public void purgeExpiredGlobal(long cutoffMs) {
+        if (!available) {
+            return;
+        }
+        executor.submit(() -> {
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement ps = conn.prepareStatement(DELETE_EXPIRED_GLOBAL)) {
+                ps.setLong(1, cutoffMs);
+                int deleted = ps.executeUpdate();
+                if (deleted > 0) {
+                    plugin.getLogger().info("[Medusa] Data retention: removed " + deleted
+                            + " expired event row(s) older than " + cutoffMs + " ms.");
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().log(Level.WARNING, "[Medusa] Failed to run data retention purge.", e);
             }
         });
     }
@@ -193,6 +270,11 @@ public class DatabaseManager {
     }
 
     public void shutdown() {
+        int dropped = droppedSaves.get();
+        if (dropped > 0) {
+            plugin.getLogger().warning("[Medusa] Shutdown: " + dropped
+                    + " save operation(s) were dropped while the database was unavailable.");
+        }
         try {
             executor.shutdown();
             if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
@@ -203,6 +285,16 @@ public class DatabaseManager {
         }
         if (dataSource != null) {
             dataSource.close();
+        }
+    }
+
+    /** A5: Logs a failure message at most once per retry interval to prevent log spam. */
+    private void logFailureThrottled(String message) {
+        long now = System.currentTimeMillis();
+        long retryMs = config.getRetryIntervalSeconds() * 1000L;
+        if (now - lastFailureLoggedAt >= retryMs) {
+            plugin.getLogger().warning(message);
+            lastFailureLoggedAt = now;
         }
     }
 }

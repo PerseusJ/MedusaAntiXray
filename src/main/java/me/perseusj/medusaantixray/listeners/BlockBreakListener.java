@@ -66,13 +66,14 @@ public class BlockBreakListener implements Listener {
 
         if (!isValuable && !isFiller) return;
 
-        Block finalBlock = block;
-        boolean finalIsValuable = isValuable;
+        // A1 FIX: hasExposedFace reads world/chunk state and must run on the main server thread.
+        // Capture the result synchronously here before handing off to the async executor.
+        final boolean exposed = isValuable && hasExposedFace(block);
+        final boolean finalIsValuable = isValuable;
 
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
             double weight = 0;
             if (finalIsValuable) {
-                boolean exposed = isBlockExposed(finalBlock);
                 weight = exposed ? config.getExposedOreWeight() : config.getHiddenOreWeight();
             }
 
@@ -114,7 +115,15 @@ public class BlockBreakListener implements Listener {
         return WorldType.IGNORED;
     }
 
-    private boolean isBlockExposed(Block block) {
+    /**
+     * Returns {@code true} if at least one of the six cardinal faces of the given block
+     * is adjacent to an air block (air, cave air, or void air).
+     *
+     * <p><strong>Must be called on the main server thread.</strong>
+     * {@link Block#getRelative(BlockFace)} reads live chunk data which is not
+     * thread-safe to access asynchronously.</p>
+     */
+    private boolean hasExposedFace(Block block) {
         for (BlockFace face : FACES) {
             Material type = block.getRelative(face).getType();
             if (type == Material.AIR || type == Material.CAVE_AIR || type == Material.VOID_AIR) {

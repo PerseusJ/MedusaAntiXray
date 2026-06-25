@@ -23,6 +23,9 @@ public class MedusaAntiXray extends JavaPlugin {
 
         configManager = new ConfigManager(this);
 
+        // A4: Validate config on startup and log warnings for any bad values.
+        configManager.validate(getLogger());
+
         databaseManager = new DatabaseManager(this, configManager);
         databaseManager.init();
 
@@ -36,10 +39,41 @@ public class MedusaAntiXray extends JavaPlugin {
         getCommand("medusa").setExecutor(command);
         getCommand("medusa").setTabCompleter(command);
 
+        // Autosave scheduler
         int interval = configManager.getSaveIntervalMinutes();
         if (interval > 0 && databaseManager.isAvailable()) {
             long ticks = interval * 60L * 20L;
             getServer().getScheduler().runTaskTimerAsynchronously(this, () -> dataManager.saveAll(), ticks, ticks);
+        }
+
+        // A3: Schedule daily data-retention purge (runs once every 24 hours asynchronously).
+        int retentionDays = configManager.getRetentionDays();
+        if (retentionDays > 0) {
+            long purgeIntervalTicks = 20L * 60 * 60 * 24; // 24 hours in ticks
+            getServer().getScheduler().runTaskTimerAsynchronously(this, () -> {
+                long cutoffMs = System.currentTimeMillis() - ((long) retentionDays * 24 * 60 * 60 * 1000L);
+                databaseManager.purgeExpiredGlobal(cutoffMs);
+            }, purgeIntervalTicks, purgeIntervalTicks);
+        }
+
+        // A5: Schedule periodic DB reconnection attempts when the database is unavailable.
+        int retryIntervalSeconds = configManager.getRetryIntervalSeconds();
+        if (retryIntervalSeconds > 0) {
+            long retryTicks = retryIntervalSeconds * 20L;
+            getServer().getScheduler().runTaskTimerAsynchronously(this, () -> {
+                if (!databaseManager.isAvailable()) {
+                    getLogger().info("[Medusa] Attempting database reconnect...");
+                    databaseManager.retryConnect();
+                }
+            }, retryTicks, retryTicks);
+        }
+
+        // A5: Log memory-only mode warning if the database never initialised.
+        if (!databaseManager.isAvailable()) {
+            getLogger().warning("[Medusa] Database unavailable — running in memory-only mode."
+                    + (retryIntervalSeconds > 0
+                        ? " Will retry in " + retryIntervalSeconds + "s."
+                        : " Retries disabled (retry-interval-seconds=0)."));
         }
 
         getLogger().info("Medusa-Anti-Xray has been enabled!");

@@ -98,3 +98,12 @@ database:
 
   # Auto-save interval in minutes (0 = only save on player quit / server stop)
   save-interval-minutes: 5
+
+  retention:
+    # Delete events older than this many days from the database (0 = never purge).
+    # The purge runs once every 24 hours asynchronously and does not block saves.
+    days: 30
+
+  # Seconds between reconnection attempts when the database is unavailable (0 = never retry).
+  # Once reconnected, full persistence resumes automatically.
+  retry-interval-seconds: 120

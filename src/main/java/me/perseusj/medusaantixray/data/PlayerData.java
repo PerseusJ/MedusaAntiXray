@@ -15,6 +15,12 @@ public class PlayerData {
     private double currentScore;
     private int currentBlocks;
 
+    /**
+     * Set to {@code true} once {@link #mergeLoadedEvents} has completed its first run.
+     * Exposed as volatile for visibility across threads; only written under {@code synchronized(this)}.
+     */
+    private volatile boolean merged = false;
+
     public PlayerData(UUID playerUuid, String playerName) {
         this.playerUuid = playerUuid;
         this.playerName = playerName;
@@ -30,6 +36,11 @@ public class PlayerData {
 
     public String getPlayerName() {
         return playerName;
+    }
+
+    /** Returns {@code true} after {@link #mergeLoadedEvents} has run at least once. */
+    public boolean isMerged() {
+        return merged;
     }
 
     public synchronized long getLastAlertTimestamp() {
@@ -58,14 +69,31 @@ public class PlayerData {
         }
     }
 
+    /**
+     * Merges database-loaded events with any events already accumulated in the live window.
+     *
+     * <p>A2 FIX: Instead of clearing the deque first and then rebuilding (which races with
+     * concurrent {@link #addEvent} calls), we capture the current live events, combine them
+     * with the loaded set, sort, and rebuild — all under {@code synchronized(this)} so no
+     * in-flight {@code addEvent} call can be lost.</p>
+     */
     public synchronized void mergeLoadedEvents(List<MineEvent> loaded) {
         if (loaded == null || loaded.isEmpty()) {
+            merged = true;
             return;
         }
-        List<MineEvent> combined = new ArrayList<>(eventWindow.size() + loaded.size());
+
+        // Capture whatever live events are already in the window (may include events that
+        // arrived between the putIfAbsent in loadOrCreateAsync and now).
+        List<MineEvent> live = new ArrayList<>(eventWindow);
+
+        // Build the combined sorted list.
+        List<MineEvent> combined = new ArrayList<>(loaded.size() + live.size());
         combined.addAll(loaded);
-        combined.addAll(eventWindow);
+        combined.addAll(live);
         combined.sort(Comparator.comparingLong(MineEvent::timestamp));
+
+        // Rebuild accumulators atomically.
         eventWindow.clear();
         currentScore = 0;
         currentBlocks = 0;
@@ -76,6 +104,8 @@ public class PlayerData {
                 currentScore += event.weight();
             }
         }
+
+        merged = true;
     }
 
     public synchronized int getTotalBlocks() {
