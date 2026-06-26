@@ -3,6 +3,7 @@
 > Last updated: 2026-06-22
 > Current version: 1.0.0-SNAPSHOT
 > Target platform: Paper 1.20.1 · Java 17
+> After a version is implemented in the project, please mark that version as [COMPLETED] to keep track which next version is to be continue.
 
 ---
 
@@ -61,7 +62,7 @@ within its phase — it either fixes a known bug or unblocks later work.
 
 ---
 
-## Phase A — v1.1: Stability & Correctness
+## Phase A — v1.1: Stability & Correctness [COMPLETED]
 
 *Bug fixes, thread-safety hardening, and operational reliability improvements.*
 *No new features; every item reduces risk for the phases that follow.*
@@ -261,7 +262,7 @@ database:
 
 ---
 
-## Phase B — v1.2: Detection Accuracy
+## Phase B — v1.2: Detection Accuracy [COMPLETED]
 
 *Improvements to the core statistical model — better signal, less noise.*
 

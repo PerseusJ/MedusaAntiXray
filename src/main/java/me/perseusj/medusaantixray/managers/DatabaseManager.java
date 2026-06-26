@@ -228,7 +228,7 @@ public class DatabaseManager {
                     long timestamp = rs.getLong(1);
                     boolean isValuable = rs.getBoolean(2);
                     double weight = rs.getDouble(3);
-                    events.add(new MineEvent(timestamp, isValuable, weight));
+                    events.add(MineEvent.of(timestamp, isValuable, weight));
                 }
             }
         } catch (SQLException e) {

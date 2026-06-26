@@ -1,146 +1,396 @@
 package me.perseusj.medusaantixray.managers;
 
-import org.bukkit.Material;
-import org.bukkit.configuration.file.FileConfiguration;
 import me.perseusj.medusaantixray.MedusaAntiXray;
+import me.perseusj.medusaantixray.data.OreWeight;
+import org.bukkit.Material;
+import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.file.FileConfiguration;
 
-import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.logging.Logger;
-import java.util.stream.Collectors;
 
 public class ConfigManager {
+
     /** All top-level keys present in the default config.yml. */
     private static final Set<String> KNOWN_TOP_LEVEL_KEYS =
             Set.of("detection", "worlds", "alerts", "messages", "database");
 
+    // -------------------------------------------------------------------------
+    // B1: Depth-normalization helper record (package-private for tests if needed)
+    // -------------------------------------------------------------------------
+    private record DepthRange(int yMin, int yMax, double multiplier) {}
+
     private final MedusaAntiXray plugin;
     private FileConfiguration config;
+
+    // -------------------------------------------------------------------------
+    // B3: Per-ore weight caches.
+    // Volatile references to immutable maps → safe for concurrent async reads.
+    // Rebuilt atomically on every reload().
+    // -------------------------------------------------------------------------
+    private volatile Map<String, OreWeight> overworldOreWeights = Map.of();
+    private volatile Map<String, OreWeight> netherOreWeights    = Map.of();
+    private volatile Map<String, OreWeight> endOreWeights       = Map.of();
+
+    // -------------------------------------------------------------------------
+    // B1: Depth-profile cache (same concurrency model as above).
+    // -------------------------------------------------------------------------
+    private volatile Map<String, List<DepthRange>> depthProfileCache = Map.of();
 
     public ConfigManager(MedusaAntiXray plugin) {
         this.plugin = plugin;
         this.config = plugin.getConfig();
+        loadCaches();
     }
+
+    // -------------------------------------------------------------------------
+    // Reload
+    // -------------------------------------------------------------------------
 
     public void reload() {
         plugin.reloadConfig();
         this.config = plugin.getConfig();
+        loadCaches();
     }
 
-    // -------------------------------------------------------------------------
-    // Detection settings
-    // -------------------------------------------------------------------------
+    // =========================================================================
+    // Cache management
+    // =========================================================================
 
-    public int getMinSampleSize() { return config.getInt("detection.min-sample-size", 64); }
-    public double getAlertThreshold() { return config.getDouble("detection.alert-threshold", 0.08); }
-    public int getWindowMinutes() { return config.getInt("detection.window-minutes", 30); }
-    public double getHiddenOreWeight() { return config.getDouble("detection.hidden-ore-weight", 1.0); }
+    /**
+     * Rebuilds all derived caches from the current {@link FileConfiguration}.
+     * Called from the constructor and from {@link #reload()}.
+     */
+    private void loadCaches() {
+        this.overworldOreWeights = Map.copyOf(loadOreWeightMap("worlds.overworld"));
+        this.netherOreWeights    = Map.copyOf(loadOreWeightMap("worlds.nether"));
+        this.endOreWeights       = Map.copyOf(loadOreWeightMap("worlds.end"));
+        this.depthProfileCache   = Map.copyOf(loadDepthProfiles());
+    }
+
+    /**
+     * Loads the ore→{@link OreWeight} mapping for {@code worldPath}.
+     *
+     * <p>Supports two config formats for {@code tracked-ores}:
+     * <ul>
+     *   <li><b>New map format (B3)</b> — each key is an ore name, value is a section with
+     *       optional {@code hidden-weight} and {@code exposed-weight}.</li>
+     *   <li><b>Old string-list format</b> — a plain {@code List<String>}; all ores receive
+     *       the world-level (or global) default weights.</li>
+     * </ul>
+     */
+    private Map<String, OreWeight> loadOreWeightMap(String worldPath) {
+        // Per-world fallback defaults; if absent, use the global detection defaults.
+        double defaultHidden  = config.getDouble(worldPath + ".default-hidden-ore-weight",  getHiddenOreWeight());
+        double defaultExposed = config.getDouble(worldPath + ".default-exposed-ore-weight", getExposedOreWeight());
+
+        Map<String, OreWeight> result = new LinkedHashMap<>();
+
+        // Try new map format first (B3).
+        ConfigurationSection section = config.getConfigurationSection(worldPath + ".tracked-ores");
+        if (section != null) {
+            for (String key : section.getKeys(false)) {
+                ConfigurationSection oreSection = section.getConfigurationSection(key);
+                if (oreSection != null) {
+                    double hidden  = oreSection.getDouble("hidden-weight",  defaultHidden);
+                    double exposed = oreSection.getDouble("exposed-weight", defaultExposed);
+                    result.put(key.toUpperCase(), new OreWeight(hidden, exposed));
+                } else {
+                    // Key present but no sub-section (e.g. bare key with null value in YAML).
+                    result.put(key.toUpperCase(), new OreWeight(defaultHidden, defaultExposed));
+                }
+            }
+            return result;
+        }
+
+        // Fall back to old string-list format.
+        for (String ore : config.getStringList(worldPath + ".tracked-ores")) {
+            result.put(ore.toUpperCase(), new OreWeight(defaultHidden, defaultExposed));
+        }
+        return result;
+    }
+
+    /**
+     * Loads depth-normalization profiles from {@code detection.depth-normalization.profiles}.
+     * Returns an empty map when depth normalization is disabled (avoids parsing cost).
+     */
+    private Map<String, List<DepthRange>> loadDepthProfiles() {
+        if (!isDepthNormalizationEnabled()) return Map.of();
+
+        ConfigurationSection profilesSection = config.getConfigurationSection(
+                "detection.depth-normalization.profiles");
+        if (profilesSection == null) return Map.of();
+
+        Map<String, List<DepthRange>> result = new LinkedHashMap<>();
+        for (String oreName : profilesSection.getKeys(false)) {
+            List<Map<?, ?>> rangeMaps = profilesSection.getMapList(oreName);
+            List<DepthRange> ranges   = new ArrayList<>(rangeMaps.size());
+            for (Map<?, ?> rangeMap : rangeMaps) {
+                Object yMinObj = rangeMap.get("y-min");
+                Object yMaxObj = rangeMap.get("y-max");
+                Object multObj = rangeMap.get("multiplier");
+                int    yMin = (yMinObj instanceof Number n) ? n.intValue()    : Integer.MIN_VALUE;
+                int    yMax = (yMaxObj instanceof Number n) ? n.intValue()    : Integer.MAX_VALUE;
+                double mult = (multObj instanceof Number n) ? n.doubleValue() : 1.0;
+                ranges.add(new DepthRange(yMin, yMax, mult));
+            }
+            result.put(oreName.toUpperCase(), Collections.unmodifiableList(ranges));
+        }
+        return result;
+    }
+
+    // =========================================================================
+    // Detection settings
+    // =========================================================================
+
+    public int    getMinSampleSize()    { return config.getInt("detection.min-sample-size", 64); }
+    public double getAlertThreshold()   { return config.getDouble("detection.alert-threshold", 0.08); }
+    public int    getWindowMinutes()    { return config.getInt("detection.window-minutes", 30); }
+    /** Global fallback hidden-ore weight. Per-ore overrides via {@link #getOverworldOreWeight} etc. */
+    public double getHiddenOreWeight()  { return config.getDouble("detection.hidden-ore-weight", 1.0); }
+    /** Global fallback exposed-ore weight. Per-ore overrides via {@link #getOverworldOreWeight} etc. */
     public double getExposedOreWeight() { return config.getDouble("detection.exposed-ore-weight", 0.25); }
 
-    // -------------------------------------------------------------------------
+    // =========================================================================
+    // B1 — Depth normalization
+    // =========================================================================
+
+    public boolean isDepthNormalizationEnabled() {
+        return config.getBoolean("detection.depth-normalization.enabled", false);
+    }
+
+    public double getDefaultDepthMultiplier() {
+        return config.getDouble("detection.depth-normalization.default-multiplier", 1.0);
+    }
+
+    /**
+     * Returns the depth-normalization multiplier for {@code materialName} at world-Y {@code y}.
+     *
+     * <p>Walks the cached profile ranges for the given ore; returns
+     * {@link #getDefaultDepthMultiplier()} when no range matches or no profile exists.</p>
+     *
+     * <p>Safe to call from any thread — reads only from the volatile, immutable cache.</p>
+     */
+    public double getDepthMultiplier(String materialName, int y) {
+        List<DepthRange> ranges = depthProfileCache.get(materialName.toUpperCase());
+        if (ranges == null) return getDefaultDepthMultiplier();
+        for (DepthRange range : ranges) {
+            if (y >= range.yMin() && y <= range.yMax()) {
+                return range.multiplier();
+            }
+        }
+        return getDefaultDepthMultiplier();
+    }
+
+    // =========================================================================
+    // B2 — Vein grouping
+    // =========================================================================
+
+    public boolean isVeinGroupingEnabled() {
+        return config.getBoolean("detection.vein-grouping.enabled", true);
+    }
+
+    /** Maximum Chebyshev distance between consecutive ore blocks to count as the same vein. */
+    public int getVeinMaxDistance() {
+        return config.getInt("detection.vein-grouping.max-distance", 3);
+    }
+
+    /** Maximum server ticks between consecutive ore blocks to count as the same vein. */
+    public int getVeinTimeoutTicks() {
+        return config.getInt("detection.vein-grouping.timeout-ticks", 100);
+    }
+
+    /** Returns {@code "divide"} or {@code "first-only"}. Defaults to {@code "divide"}. */
+    public String getVeinMode() {
+        return config.getString("detection.vein-grouping.mode", "divide");
+    }
+
+    // =========================================================================
+    // B3 — Per-ore configurable weights
+    // =========================================================================
+
+    /**
+     * Returns the {@link OreWeight} for the given Overworld ore.
+     * Falls back to the global {@link #getHiddenOreWeight()} / {@link #getExposedOreWeight()}
+     * if the ore is not in the configured map.
+     */
+    public OreWeight getOverworldOreWeight(String materialName) {
+        return overworldOreWeights.getOrDefault(materialName.toUpperCase(),
+                new OreWeight(getHiddenOreWeight(), getExposedOreWeight()));
+    }
+
+    /** Same as {@link #getOverworldOreWeight} but for Nether ores. */
+    public OreWeight getNetherOreWeight(String materialName) {
+        return netherOreWeights.getOrDefault(materialName.toUpperCase(),
+                new OreWeight(getHiddenOreWeight(), getExposedOreWeight()));
+    }
+
+    /** Same as {@link #getOverworldOreWeight} but for End ores (B3 + B6). */
+    public OreWeight getEndOreWeight(String materialName) {
+        return endOreWeights.getOrDefault(materialName.toUpperCase(),
+                new OreWeight(getHiddenOreWeight(), getExposedOreWeight()));
+    }
+
+    // =========================================================================
+    // B4 — Tool & enchantment modifiers
+    // =========================================================================
+
+    public boolean isToolModifiersEnabled() {
+        return config.getBoolean("detection.tool-modifiers.enabled", true);
+    }
+
+    /** Multiplier applied to the ore weight when the player uses a Silk Touch tool. */
+    public double getSilkTouchMultiplier() {
+        return config.getDouble("detection.tool-modifiers.silk-touch-multiplier", 0.5);
+    }
+
+    /**
+     * Per-Fortune-level multiplier. Applied as {@code pow(multiplier, fortuneLevel)}.
+     * E.g., Fortune III → {@code 0.8^3 ≈ 0.51} suspicion reduction.
+     */
+    public double getFortuneMultiplierPerLevel() {
+        return config.getDouble("detection.tool-modifiers.fortune-multiplier-per-level", 0.8);
+    }
+
+    /** Multiplier applied when the tool has no relevant enchantments (slightly more suspicious). */
+    public double getNoEnchantmentsMultiplier() {
+        return config.getDouble("detection.tool-modifiers.no-enchantments-multiplier", 1.2);
+    }
+
+    // =========================================================================
+    // B5 — Multi-face exposure scoring
+    // =========================================================================
+
+    public boolean isExposureScoringEnabled() {
+        return config.getBoolean("detection.exposure-scoring.enabled", false);
+    }
+
+    /**
+     * Multiplier applied to the interpolated weight when any adjacent face has sky light {@code > 0}.
+     * Reduces suspicion for surface or near-surface ores.
+     */
+    public double getSkyLightPenalty() {
+        return config.getDouble("detection.exposure-scoring.sky-light-penalty", 0.5);
+    }
+
+    /**
+     * If the number of air-adjacent faces is {@code <=} this threshold, the ore is treated as
+     * fully hidden (receives maximum weight). Defaults to {@code 1}.
+     */
+    public int getHiddenThresholdFaces() {
+        return config.getInt("detection.exposure-scoring.hidden-threshold-faces", 1);
+    }
+
+    // =========================================================================
     // Overworld settings
-    // -------------------------------------------------------------------------
+    // =========================================================================
 
-    public boolean isOverworldEnabled() { return config.getBoolean("worlds.overworld.enabled", true); }
-    public List<String> getOverworldNames() { return config.getStringList("worlds.overworld.names"); }
-    public List<String> getOverworldOres() { return config.getStringList("worlds.overworld.tracked-ores"); }
-    public List<String> getOverworldFillers() { return config.getStringList("worlds.overworld.filler-blocks"); }
+    public boolean      isOverworldEnabled()    { return config.getBoolean("worlds.overworld.enabled", true); }
+    public List<String> getOverworldNames()     { return config.getStringList("worlds.overworld.names"); }
+    /** Returns the tracked-ore names for the Overworld (derived from the B3 weight map). */
+    public List<String> getOverworldOres()      { return new ArrayList<>(overworldOreWeights.keySet()); }
+    public List<String> getOverworldFillers()   { return config.getStringList("worlds.overworld.filler-blocks"); }
 
-    // -------------------------------------------------------------------------
+    // =========================================================================
     // Nether settings
-    // -------------------------------------------------------------------------
+    // =========================================================================
 
-    public boolean isNetherEnabled() { return config.getBoolean("worlds.nether.enabled", true); }
-    public List<String> getNetherNames() { return config.getStringList("worlds.nether.names"); }
-    public List<String> getNetherOres() { return config.getStringList("worlds.nether.tracked-ores"); }
-    public List<String> getNetherFillers() { return config.getStringList("worlds.nether.filler-blocks"); }
+    public boolean      isNetherEnabled()       { return config.getBoolean("worlds.nether.enabled", true); }
+    public List<String> getNetherNames()        { return config.getStringList("worlds.nether.names"); }
+    /** Returns the tracked-ore names for the Nether (derived from the B3 weight map). */
+    public List<String> getNetherOres()         { return new ArrayList<>(netherOreWeights.keySet()); }
+    public List<String> getNetherFillers()      { return config.getStringList("worlds.nether.filler-blocks"); }
 
-    // -------------------------------------------------------------------------
+    // =========================================================================
+    // B6 — End world settings
+    // =========================================================================
+
+    public boolean      isEndEnabled()          { return config.getBoolean("worlds.end.enabled", false); }
+    public List<String> getEndNames()           { return config.getStringList("worlds.end.names"); }
+    /** Returns the tracked-ore names for the End (derived from the B3 weight map). */
+    public List<String> getEndOres()            { return new ArrayList<>(endOreWeights.keySet()); }
+    public List<String> getEndFillers()         { return config.getStringList("worlds.end.filler-blocks"); }
+
+    // =========================================================================
     // Alerts
-    // -------------------------------------------------------------------------
+    // =========================================================================
 
-    public int getCooldownSeconds() { return config.getInt("alerts.cooldown-seconds", 60); }
-    public String getStaffPermission() { return config.getString("alerts.staff-permission", "medusa.staff"); }
-    public String getPrefix() { return config.getString("alerts.prefix", "&8[&4Medusa&8]&r"); }
-    public String getAlertMessage() { return config.getString("alerts.alert-message", "{prefix} &c⚠ {player} &7may be X-raying! &cRatio: &f{ratio}% &7({score} pts / {total} blocks)"); }
-    public String getCheckMessage() { return config.getString("alerts.check-message", "&7Player &f{player} &7| Score: &c{score} &7| Total: &f{total} &7| Ratio: &c{ratio}% &7| Window: &f{window}m"); }
+    public int    getCooldownSeconds()    { return config.getInt("alerts.cooldown-seconds", 60); }
+    public String getStaffPermission()   { return config.getString("alerts.staff-permission", "medusa.staff"); }
+    public String getPrefix()            { return config.getString("alerts.prefix", "&8[&4Medusa&8]&r"); }
+    public String getAlertMessage()      { return config.getString("alerts.alert-message",
+            "{prefix} &c⚠ {player} &7may be X-raying! &cRatio: &f{ratio}% &7({score} pts / {total} blocks)"); }
+    public String getCheckMessage()      { return config.getString("alerts.check-message",
+            "&7Player &f{player} &7| Score: &c{score} &7| Total: &f{total} &7| Ratio: &c{ratio}% &7| Window: &f{window}m"); }
 
-    // -------------------------------------------------------------------------
+    // =========================================================================
     // Messages
-    // -------------------------------------------------------------------------
+    // =========================================================================
 
-    public String getNoPermissionMessage() { return config.getString("messages.no-permission", "&cYou don't have permission to use this command."); }
-    public String getReloadSuccessMessage() { return config.getString("messages.reload-success", "&aConfiguration reloaded successfully."); }
+    public String getNoPermissionMessage()   { return config.getString("messages.no-permission", "&cYou don't have permission to use this command."); }
+    public String getReloadSuccessMessage()  { return config.getString("messages.reload-success", "&aConfiguration reloaded successfully."); }
     public String getPlayerNotFoundMessage() { return config.getString("messages.player-not-found", "&cPlayer &f{player} &cnot found or has no data."); }
-    public String getUsageCheckMessage() { return config.getString("messages.usage-check", "&cUsage: /medusa check <player>"); }
+    public String getUsageCheckMessage()     { return config.getString("messages.usage-check", "&cUsage: /medusa check <player>"); }
 
-    // -------------------------------------------------------------------------
+    // =========================================================================
     // Database settings
-    // -------------------------------------------------------------------------
+    // =========================================================================
 
-    public String getDatabaseType() { return config.getString("database.type", "sqlite"); }
-    public String getSqliteFile() { return config.getString("database.sqlite.file", "medusa_antixray.db"); }
-    public String getMysqlHost() { return config.getString("database.mysql.host", "localhost"); }
-    public int getMysqlPort() { return config.getInt("database.mysql.port", 3306); }
-    public String getMysqlDatabase() { return config.getString("database.mysql.database", "medusa_antixray"); }
-    public String getMysqlUsername() { return config.getString("database.mysql.username", "root"); }
-    public String getMysqlPassword() { return config.getString("database.mysql.password", ""); }
-    public int getSaveIntervalMinutes() { return config.getInt("database.save-interval-minutes", 5); }
+    public String getDatabaseType()      { return config.getString("database.type", "sqlite"); }
+    public String getSqliteFile()        { return config.getString("database.sqlite.file", "medusa_antixray.db"); }
+    public String getMysqlHost()         { return config.getString("database.mysql.host", "localhost"); }
+    public int    getMysqlPort()         { return config.getInt("database.mysql.port", 3306); }
+    public String getMysqlDatabase()     { return config.getString("database.mysql.database", "medusa_antixray"); }
+    public String getMysqlUsername()     { return config.getString("database.mysql.username", "root"); }
+    public String getMysqlPassword()     { return config.getString("database.mysql.password", ""); }
+    public int    getSaveIntervalMinutes(){ return config.getInt("database.save-interval-minutes", 5); }
 
-    // A3: Number of days to retain events in the database (0 = never purge).
-    public int getRetentionDays() { return config.getInt("database.retention.days", 30); }
-
-    // A5: Seconds between reconnection attempts when the database is unavailable (0 = never retry).
+    // A3
+    public int getRetentionDays()        { return config.getInt("database.retention.days", 30); }
+    // A5
     public int getRetryIntervalSeconds() { return config.getInt("database.retry-interval-seconds", 120); }
 
-    // -------------------------------------------------------------------------
-    // A4: Config validation
-    // -------------------------------------------------------------------------
+    // =========================================================================
+    // A4 + B-phase: Config validation
+    // =========================================================================
 
     /**
      * Validates all config values and logs {@code WARNING} for any that are invalid,
-     * out-of-range, or unrecognized. Invalid values do not prevent the plugin from enabling;
-     * the plugin falls back to defaults in those cases.
+     * out-of-range, or unrecognized. Invalid values do not prevent the plugin from enabling.
      *
-     * @param logger the server logger to write warnings to.
+     * @param logger the server logger to write warnings to
      */
     public void validate(Logger logger) {
+
         // --- detection ---
         double alertThreshold = getAlertThreshold();
         if (alertThreshold < 0.0 || alertThreshold > 1.0) {
             logger.warning("[Medusa] Config warning: detection.alert-threshold=" + alertThreshold
                     + " is out of range [0.0, 1.0]. Expected a fraction such as 0.08.");
         }
-
         int minSampleSize = getMinSampleSize();
         if (minSampleSize < 1) {
-            logger.warning("[Medusa] Config warning: detection.min-sample-size=" + minSampleSize
-                    + " must be >= 1.");
+            logger.warning("[Medusa] Config warning: detection.min-sample-size=" + minSampleSize + " must be >= 1.");
         }
-
         int windowMinutes = getWindowMinutes();
         if (windowMinutes < 1) {
-            logger.warning("[Medusa] Config warning: detection.window-minutes=" + windowMinutes
-                    + " must be >= 1.");
+            logger.warning("[Medusa] Config warning: detection.window-minutes=" + windowMinutes + " must be >= 1.");
         }
-
         int cooldownSeconds = getCooldownSeconds();
         if (cooldownSeconds < 0) {
-            logger.warning("[Medusa] Config warning: alerts.cooldown-seconds=" + cooldownSeconds
-                    + " must be >= 0.");
+            logger.warning("[Medusa] Config warning: alerts.cooldown-seconds=" + cooldownSeconds + " must be >= 0.");
         }
-
-        double hiddenWeight = getHiddenOreWeight();
-        if (hiddenWeight < 0) {
-            logger.warning("[Medusa] Config warning: detection.hidden-ore-weight=" + hiddenWeight
-                    + " must be >= 0.");
+        if (getHiddenOreWeight() < 0) {
+            logger.warning("[Medusa] Config warning: detection.hidden-ore-weight=" + getHiddenOreWeight() + " must be >= 0.");
         }
-
-        double exposedWeight = getExposedOreWeight();
-        if (exposedWeight < 0) {
-            logger.warning("[Medusa] Config warning: detection.exposed-ore-weight=" + exposedWeight
-                    + " must be >= 0.");
+        if (getExposedOreWeight() < 0) {
+            logger.warning("[Medusa] Config warning: detection.exposed-ore-weight=" + getExposedOreWeight() + " must be >= 0.");
         }
 
         // --- database type ---
@@ -149,31 +399,92 @@ public class ConfigManager {
             logger.warning("[Medusa] Config warning: database.type=\"" + dbType
                     + "\" is not supported. Use \"sqlite\" or \"mysql\".");
         }
-
         if (dbType.equalsIgnoreCase("mysql")) {
-            if (getMysqlHost() == null || getMysqlHost().isBlank()) {
+            if (getMysqlHost()     == null || getMysqlHost().isBlank())
                 logger.warning("[Medusa] Config warning: database.mysql.host is blank.");
-            }
-            if (getMysqlDatabase() == null || getMysqlDatabase().isBlank()) {
+            if (getMysqlDatabase() == null || getMysqlDatabase().isBlank())
                 logger.warning("[Medusa] Config warning: database.mysql.database is blank.");
-            }
-            if (getMysqlUsername() == null || getMysqlUsername().isBlank()) {
+            if (getMysqlUsername() == null || getMysqlUsername().isBlank())
                 logger.warning("[Medusa] Config warning: database.mysql.username is blank.");
-            }
         }
 
-        // --- material name validation ---
-        validateMaterials(logger, "worlds.overworld.tracked-ores", getOverworldOres());
+        // --- material names ---
+        validateMaterials(logger, "worlds.overworld.tracked-ores",  getOverworldOres());
         validateMaterials(logger, "worlds.overworld.filler-blocks", getOverworldFillers());
-        validateMaterials(logger, "worlds.nether.tracked-ores", getNetherOres());
-        validateMaterials(logger, "worlds.nether.filler-blocks", getNetherFillers());
+        validateMaterials(logger, "worlds.nether.tracked-ores",     getNetherOres());
+        validateMaterials(logger, "worlds.nether.filler-blocks",    getNetherFillers());
+        if (isEndEnabled()) {
+            validateMaterials(logger, "worlds.end.tracked-ores",  getEndOres());
+            validateMaterials(logger, "worlds.end.filler-blocks", getEndFillers());
+        }
 
         // --- world names non-empty when enabled ---
-        if (isOverworldEnabled() && getOverworldNames().isEmpty()) {
+        if (isOverworldEnabled() && getOverworldNames().isEmpty())
             logger.warning("[Medusa] Config warning: worlds.overworld is enabled but worlds.overworld.names is empty.");
-        }
-        if (isNetherEnabled() && getNetherNames().isEmpty()) {
+        if (isNetherEnabled() && getNetherNames().isEmpty())
             logger.warning("[Medusa] Config warning: worlds.nether is enabled but worlds.nether.names is empty.");
+        if (isEndEnabled() && getEndNames().isEmpty())
+            logger.warning("[Medusa] Config warning: worlds.end is enabled but worlds.end.names is empty.");
+
+        // --- B1: depth-normalization ---
+        if (isDepthNormalizationEnabled()) {
+            double defMult = getDefaultDepthMultiplier();
+            if (defMult < 0) {
+                logger.warning("[Medusa] Config warning: detection.depth-normalization.default-multiplier="
+                        + defMult + " must be >= 0.");
+            }
+            Set<String> allTracked = new HashSet<>();
+            allTracked.addAll(getOverworldOres());
+            allTracked.addAll(getNetherOres());
+            allTracked.addAll(getEndOres());
+            for (String oreName : depthProfileCache.keySet()) {
+                if (!allTracked.contains(oreName)) {
+                    logger.warning("[Medusa] Config warning: depth-normalization profile '"
+                            + oreName + "' does not appear in any tracked-ores list.");
+                }
+            }
+        }
+
+        // --- B2: vein grouping ---
+        if (isVeinGroupingEnabled()) {
+            if (getVeinMaxDistance() < 0)
+                logger.warning("[Medusa] Config warning: detection.vein-grouping.max-distance must be >= 0.");
+            if (getVeinTimeoutTicks() < 0)
+                logger.warning("[Medusa] Config warning: detection.vein-grouping.timeout-ticks must be >= 0.");
+            String mode = getVeinMode();
+            if (!"divide".equalsIgnoreCase(mode) && !"first-only".equalsIgnoreCase(mode)) {
+                logger.warning("[Medusa] Config warning: detection.vein-grouping.mode='" + mode
+                        + "' is invalid. Use 'divide' or 'first-only'.");
+            }
+        }
+
+        // --- B3: per-ore weight values ---
+        validateOreWeightMap(logger, "overworld", overworldOreWeights);
+        validateOreWeightMap(logger, "nether",    netherOreWeights);
+        if (isEndEnabled()) validateOreWeightMap(logger, "end", endOreWeights);
+
+        // --- B4: tool modifiers ---
+        if (isToolModifiersEnabled()) {
+            if (getSilkTouchMultiplier() < 0)
+                logger.warning("[Medusa] Config warning: detection.tool-modifiers.silk-touch-multiplier must be >= 0.");
+            if (getFortuneMultiplierPerLevel() < 0)
+                logger.warning("[Medusa] Config warning: detection.tool-modifiers.fortune-multiplier-per-level must be >= 0.");
+            if (getNoEnchantmentsMultiplier() < 0)
+                logger.warning("[Medusa] Config warning: detection.tool-modifiers.no-enchantments-multiplier must be >= 0.");
+        }
+
+        // --- B5: exposure scoring ---
+        if (isExposureScoringEnabled()) {
+            double penalty = getSkyLightPenalty();
+            if (penalty < 0 || penalty > 1) {
+                logger.warning("[Medusa] Config warning: detection.exposure-scoring.sky-light-penalty="
+                        + penalty + " is out of range [0.0, 1.0].");
+            }
+            int threshold = getHiddenThresholdFaces();
+            if (threshold < 0 || threshold > 6) {
+                logger.warning("[Medusa] Config warning: detection.exposure-scoring.hidden-threshold-faces="
+                        + threshold + " is out of range [0, 6].");
+            }
         }
 
         // --- unknown top-level keys ---
@@ -196,6 +507,20 @@ public class ConfigManager {
                 logger.warning("[Medusa] Config warning: \"" + name
                         + "\" in " + path + " is not a valid Material name.");
             }
+        }
+    }
+
+    /** Logs warnings for any negative ore weights in the given map. */
+    private void validateOreWeightMap(Logger logger, String worldName, Map<String, OreWeight> map) {
+        for (Map.Entry<String, OreWeight> entry : map.entrySet()) {
+            String ore = entry.getKey();
+            OreWeight w = entry.getValue();
+            if (w.hiddenWeight() < 0)
+                logger.warning("[Medusa] Config warning: hidden-weight for " + ore
+                        + " in worlds." + worldName + ".tracked-ores must be >= 0.");
+            if (w.exposedWeight() < 0)
+                logger.warning("[Medusa] Config warning: exposed-weight for " + ore
+                        + " in worlds." + worldName + ".tracked-ores must be >= 0.");
         }
     }
 }

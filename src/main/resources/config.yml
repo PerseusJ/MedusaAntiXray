@@ -1,6 +1,7 @@
 # =============================================
 #   Medusa-Anti-Xray Configuration
 #   Author: PerseusJ | API: 1.20+
+#   Version: 1.2.0
 # =============================================
 
 detection:
@@ -14,11 +15,88 @@ detection:
   # Sliding window duration in minutes
   window-minutes: 30
 
+  # Global fallback weights (used when no per-ore override is configured below).
   # Weight applied to ores that had NO exposed face (fully hidden = suspicious)
   hidden-ore-weight: 1.0
-
   # Weight applied to ores that had at least one face exposed to air (cave mining)
   exposed-ore-weight: 0.25
+
+  # ---------------------------------------------------------------------------
+  # B1 — Y-level / Depth normalization
+  # Multiplies each ore's weight by a factor based on the Y-level it was mined at.
+  # Ores found at statistically optimal depths are less suspicious.
+  # ---------------------------------------------------------------------------
+  depth-normalization:
+    enabled: false
+    # Multiplier used when no profile range matches (keep at 1.0 to preserve existing behavior)
+    default-multiplier: 1.0
+    profiles:
+      DIAMOND_ORE:
+        - y-min: -64   # Optimal diamond layer
+          y-max: -54
+          multiplier: 0.5   # Low suspicion — expected depth
+        - y-min: -53
+          y-max: 320
+          multiplier: 2.0   # High suspicion — anomalous depth
+      DEEPSLATE_DIAMOND_ORE:
+        - y-min: -64
+          y-max: -54
+          multiplier: 0.5
+        - y-min: -53
+          y-max: 320
+          multiplier: 2.0
+      ANCIENT_DEBRIS:
+        - y-min: 8
+          y-max: 22
+          multiplier: 0.5   # Optimal ancient debris layer
+        - y-min: 23
+          y-max: 119
+          multiplier: 2.5
+
+  # ---------------------------------------------------------------------------
+  # B2 — Vein-awareness grouping
+  # Groups contiguous same-ore blocks mined in rapid succession into a single vein
+  # to avoid inflating the suspicion score when a player mines a naturally large vein.
+  # ---------------------------------------------------------------------------
+  vein-grouping:
+    enabled: true
+    # Max Chebyshev distance between consecutive ore blocks to consider the same vein
+    max-distance: 3
+    # Max server ticks between adjacent vein-breaks before starting a new vein
+    timeout-ticks: 100
+    # How to distribute weight across vein blocks:
+    #   divide     — each block gets weight / veinSize  (gradual reduction)
+    #   first-only — only the first block scores; the rest count as filler
+    mode: "divide"
+
+  # ---------------------------------------------------------------------------
+  # B4 — Tool & enchantment awareness
+  # Adjusts suspicion based on the tool used to mine the ore.
+  # Silk Touch and Fortune suggest the player knows what they are looking for
+  # (and are working legitimately), while an unenchanted pick is slightly more suspicious.
+  # ---------------------------------------------------------------------------
+  tool-modifiers:
+    enabled: true
+    # Multiplier when Silk Touch is active (player sees ore through stone)
+    silk-touch-multiplier: 0.5
+    # Per-Fortune-level multiplier applied as pow(multiplier, fortuneLevel)
+    # Fortune III → 0.8^3 ≈ 0.51 reduction
+    fortune-multiplier-per-level: 0.8
+    # Multiplier when no relevant enchantments are present (slightly more suspicious)
+    no-enchantments-multiplier: 1.2
+
+  # ---------------------------------------------------------------------------
+  # B5 — Multi-face exposure scoring
+  # Replaces the binary "is this face air?" check with a graduated score that counts
+  # how many faces are exposed to air and whether any face has sky light.
+  # ---------------------------------------------------------------------------
+  exposure-scoring:
+    enabled: false
+    # Score formula: hiddenWeight + (airFaces / 6) × (exposedWeight − hiddenWeight)
+    # If any adjacent face has sky light > 0, the result is multiplied by sky-light-penalty.
+    sky-light-penalty: 0.5
+    # Ore is treated as fully hidden (max weight) when air-face count <= this value
+    hidden-threshold-faces: 1
 
 worlds:
   overworld:
@@ -26,13 +104,36 @@ worlds:
     # The exact world name(s) treated as Overworld. Supports multiple entries.
     names:
       - "world"
+
+    # B3: tracked-ores as a map with optional per-ore weight overrides.
+    # Each ore can have its own hidden-weight and exposed-weight.
+    # Ores without explicit weights use default-hidden-ore-weight / default-exposed-ore-weight.
+    # Old string-list format is still supported for backward compatibility.
     tracked-ores:
-      - DIAMOND_ORE
-      - DEEPSLATE_DIAMOND_ORE
-      - GOLD_ORE
-      - DEEPSLATE_GOLD_ORE
-      - EMERALD_ORE
-      - DEEPSLATE_EMERALD_ORE
+      DIAMOND_ORE:
+        hidden-weight: 1.5
+        exposed-weight: 0.4
+      DEEPSLATE_DIAMOND_ORE:
+        hidden-weight: 1.5
+        exposed-weight: 0.4
+      GOLD_ORE:
+        hidden-weight: 0.6
+        exposed-weight: 0.15
+      DEEPSLATE_GOLD_ORE:
+        hidden-weight: 0.6
+        exposed-weight: 0.15
+      EMERALD_ORE:
+        hidden-weight: 1.2
+        exposed-weight: 0.3
+      DEEPSLATE_EMERALD_ORE:
+        hidden-weight: 1.2
+        exposed-weight: 0.3
+
+    # Fallback weights for ores in this world that have no per-ore override.
+    # If absent, the global detection.hidden-ore-weight / detection.exposed-ore-weight are used.
+    default-hidden-ore-weight: 1.0
+    default-exposed-ore-weight: 0.25
+
     # All stone-family blocks counted as "filler" for ratio denominator
     filler-blocks:
       - STONE
@@ -51,13 +152,32 @@ worlds:
     names:
       - "world_nether"
     tracked-ores:
-      - ANCIENT_DEBRIS
+      ANCIENT_DEBRIS:
+        hidden-weight: 2.0
+        exposed-weight: 0.5
+    default-hidden-ore-weight: 1.0
+    default-exposed-ore-weight: 0.25
     filler-blocks:
       - NETHERRACK
       - BASALT
       - BLACKSTONE
       - SOUL_SAND
       - SOUL_SOIL
+
+  # B6 — End world support
+  end:
+    enabled: false
+    names:
+      - "world_the_end"
+    tracked-ores:
+      - OBSIDIAN
+      - END_STONE_BRICKS
+      - PURPUR_BLOCK
+      - CHEST
+    default-hidden-ore-weight: 1.0
+    default-exposed-ore-weight: 0.25
+    filler-blocks:
+      - END_STONE
 
 alerts:
   # Seconds between repeated alerts for the same player (prevents chat spam)
