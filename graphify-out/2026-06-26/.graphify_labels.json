@@ -1,1 +1,18 @@
-{"0": "Core Detection Logic", "1": "Configuration Management", "2": "Session Management", "3": "Alert Dispatch System", "4": "Plugin Lifecycle", "5": "Plugin Configuration", "6": "Command Handler", "7": "Graphify Agent Rules", "8": "OpenCode Configuration", "9": "Plugin Dependencies", "10": "Graphify Plugin", "11": "MineEvent Model"}
+{
+  "0": "Core Detection Logic",
+  "1": "Configuration Management",
+  "2": "Session Management",
+  "3": "Alert Dispatch System",
+  "4": "Plugin Lifecycle",
+  "5": "Plugin Configuration",
+  "6": "Command Handler",
+  "7": "Graphify Agent Rules",
+  "8": "OpenCode Configuration",
+  "9": "Plugin Dependencies",
+  "10": "Graphify Plugin",
+  "11": "MineEvent Model",
+  "12": "Community 12",
+  "13": "Community 13",
+  "14": "Community 14",
+  "15": "Community 15"
+}
