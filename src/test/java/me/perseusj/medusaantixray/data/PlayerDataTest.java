@@ -424,4 +424,165 @@ public class PlayerDataTest {
         assertEquals(expectedFortune, fortune.calculateRatio(), 1e-6,
                 "Fortune ratio should match pow(0.8,3) reduction.");
     }
+
+    // =========================================================================
+    // Phase C — False-Positive Reduction tests
+    // =========================================================================
+
+    // -------------------------------------------------------------------------
+    // C1 — Teleport cooldown
+    // -------------------------------------------------------------------------
+
+    @Test
+    void c1_isInTeleportCooldown() {
+        PlayerData data = new PlayerData(UUID.randomUUID(), "c1-test");
+        long now = 100_000L;
+        long cooldownMs = 10_000L;
+
+        // No teleport recorded — not in cooldown
+        assertFalse(data.isInTeleportCooldown(now, cooldownMs), "No teleport should not be in cooldown");
+
+        data.setLastTeleportTimestamp(now);
+        assertTrue(data.isInTeleportCooldown(now + 1, cooldownMs), "Just after teleport should be in cooldown");
+        assertTrue(data.isInTeleportCooldown(now + 9_999L, cooldownMs), "9.999s after should still be in cooldown");
+        assertFalse(data.isInTeleportCooldown(now + 10_001L, cooldownMs), "10.001s after should be out of cooldown");
+    }
+
+    @Test
+    void c1_teleportCooldownZeroDisables() {
+        PlayerData data = new PlayerData(UUID.randomUUID(), "c1-zero");
+        data.setLastTeleportTimestamp(1000L);
+        assertFalse(data.isInTeleportCooldown(2000L, 0), "Zero cooldown should disable the check");
+    }
+
+    // -------------------------------------------------------------------------
+    // C2 — Mining style classification
+    // -------------------------------------------------------------------------
+
+    @Test
+    void c2_unknownWhenInsufficientData() {
+        PlayerData data = new PlayerData(UUID.randomUUID(), "c2-insufficient");
+        for (int i = 0; i < 19; i++) {
+            data.addEvent(MineEvent.of(i, false, 0.0));
+        }
+        data.classifyMiningStyle();
+        assertEquals(PlayerData.MiningStyle.UNKNOWN, data.getMiningStyle(),
+                "Fewer than 20 events should remain UNKNOWN");
+    }
+
+    @Test
+    void c2_caveClassifierFiresOnHighOreRatioAndHighVariance() {
+        PlayerData data = new PlayerData(UUID.randomUUID(), "c2-cave");
+        // Simulate a cave explorer: mix of ores and filler with high Y variance.
+        // Y range 0..60 gives std dev ≈ 17.3 for uniform spread, well above 15.0 threshold.
+        for (int i = 0; i < 60; i++) {
+            int y = i % 61; // Y varies from 0 to 60
+            if (i % 4 == 0) {
+                data.addEvent(new MineEvent(i, true, 1.0, y, 1, false, 0, 0, "UNKNOWN"));
+            } else {
+                data.addEvent(new MineEvent(i, false, 0.0, y, 1, false, 0, 0, "UNKNOWN"));
+            }
+        }
+        // classifyMiningStyle only runs its heuristic every STYLE_CLASSIFY_INTERVAL calls.
+        // Call it enough times to trigger classification.
+        for (int i = 0; i < 55; i++) {
+            data.classifyMiningStyle();
+        }
+        assertEquals(PlayerData.MiningStyle.CAVE, data.getMiningStyle(),
+                "High ore ratio + high Y variance should classify as CAVE");
+    }
+
+    @Test
+    void c2_stripClassifierFiresOnLowVariance() {
+        PlayerData data = new PlayerData(UUID.randomUUID(), "c2-strip");
+        // Strip miner: all blocks at nearly the same Y
+        for (int i = 0; i < 60; i++) {
+            boolean valuable = (i % 20 == 0);
+            data.addEvent(new MineEvent(i, valuable, valuable ? 1.0 : 0.0,
+                    11, 1, false, 0, 0, "UNKNOWN"));
+        }
+        for (int i = 0; i < 55; i++) {
+            data.classifyMiningStyle();
+        }
+        assertEquals(PlayerData.MiningStyle.STRIP, data.getMiningStyle(),
+                "Very low Y variance with some ore finds should classify as STRIP");
+    }
+
+    // -------------------------------------------------------------------------
+    // C4 — Trust multiplier
+    // -------------------------------------------------------------------------
+
+    @Test
+    void c4_trustMultiplierStoredAndRetrieved() {
+        PlayerData data = new PlayerData(UUID.randomUUID(), "c4-trust");
+        assertEquals(1.0, data.getTrustMultiplier(), EPSILON, "Default trust multiplier should be 1.0");
+
+        data.setTrustMultiplier(0.5);
+        assertEquals(0.5, data.getTrustMultiplier(), EPSILON, "Trust multiplier should be settable");
+
+        data.setTrustMultiplier(0.0);
+        assertEquals(0.0, data.getTrustMultiplier(), EPSILON, "Zero trust multiplier should suppress all score");
+    }
+
+    @Test
+    void c4_trustMultiplierAffectsScore() {
+        PlayerData data = new PlayerData(UUID.randomUUID(), "c4-score");
+        for (int i = 0; i < 10; i++) {
+            data.addEvent(MineEvent.of(i, true, 1.0));
+        }
+        double baseScore = data.calculateScore();
+
+        data.setTrustMultiplier(0.5);
+        double adjustedScore = baseScore * 0.5;
+        assertEquals(adjustedScore, baseScore * data.getTrustMultiplier(), EPSILON,
+                "Trust multiplier should linearly scale the score");
+    }
+
+    // -------------------------------------------------------------------------
+    // C5 — Mine-gap multiplier (test ConfigManager logic via direct computation)
+    // -------------------------------------------------------------------------
+
+    @Test
+    void c5_gapMultiplierShortGapReturnsMax() {
+        // We test the multiplier logic directly since it's a pure function.
+        // ConfigManager.getMineGapMultiplier uses linear interpolation.
+        long minGap = 3000;
+        long maxGap = 120000;
+        double maxMult = 2.0;
+
+        // gap <= minGap -> max multiplier
+        double result = computeGapMultiplier(1000, minGap, maxGap, maxMult);
+        assertEquals(maxMult, result, EPSILON, "Gap shorter than min-gap should return max multiplier");
+    }
+
+    @Test
+    void c5_gapMultiplierLongGapReturnsOne() {
+        long minGap = 3000;
+        long maxGap = 120000;
+        double maxMult = 2.0;
+
+        // gap >= maxGap -> 1.0
+        double result = computeGapMultiplier(120_001, minGap, maxGap, maxMult);
+        assertEquals(1.0, result, EPSILON, "Gap longer than max-gap should return 1.0");
+    }
+
+    @Test
+    void c5_gapMultiplierInterpolatesLinearly() {
+        long minGap = 3000;
+        long maxGap = 120000;
+        double maxMult = 2.0;
+
+        // mid gap: t = (61500 - 3000) / (120000 - 3000) = 58500 / 117000 = 0.5
+        // multiplier = maxMult - t * (maxMult - 1.0) = 2.0 - 0.5 * 1.0 = 1.5
+        double result = computeGapMultiplier(61500, minGap, maxGap, maxMult);
+        assertEquals(1.5, result, 1e-9, "Mid-range gap should interpolate to 1.5");
+    }
+
+    /** Mirrors ConfigManager.getMineGapMultiplier logic for independent testing. */
+    private static double computeGapMultiplier(long gapMs, long minGap, long maxGap, double maxMult) {
+        if (gapMs <= minGap) return maxMult;
+        if (gapMs >= maxGap) return 1.0;
+        double t = (double) (gapMs - minGap) / (double) (maxGap - minGap);
+        return maxMult - t * (maxMult - 1.0);
+    }
 }

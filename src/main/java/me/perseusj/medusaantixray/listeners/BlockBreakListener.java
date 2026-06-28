@@ -5,6 +5,7 @@ import me.perseusj.medusaantixray.data.OreWeight;
 import me.perseusj.medusaantixray.data.PlayerData;
 import me.perseusj.medusaantixray.data.VeinContext;
 import me.perseusj.medusaantixray.managers.AlertManager;
+import me.perseusj.medusaantixray.managers.CalibrationManager;
 import me.perseusj.medusaantixray.managers.ConfigManager;
 import me.perseusj.medusaantixray.managers.DataManager;
 import org.bukkit.GameMode;
@@ -40,6 +41,7 @@ public class BlockBreakListener implements Listener {
     private final ConfigManager config;
     private final DataManager dataManager;
     private final AlertManager alertManager;
+    private final CalibrationManager calibrationManager;
 
     /**
      * B2: Per-player ore-vein tracking context.
@@ -48,11 +50,13 @@ public class BlockBreakListener implements Listener {
     private final Map<UUID, VeinContext> veinContexts = new HashMap<>();
 
     public BlockBreakListener(JavaPlugin plugin, ConfigManager config,
-                              DataManager dataManager, AlertManager alertManager) {
+                              DataManager dataManager, AlertManager alertManager,
+                              CalibrationManager calibrationManager) {
         this.plugin       = plugin;
         this.config       = config;
         this.dataManager  = dataManager;
         this.alertManager = alertManager;
+        this.calibrationManager = calibrationManager;
     }
 
     // =========================================================================
@@ -176,6 +180,15 @@ public class BlockBreakListener implements Listener {
                 && "divide".equalsIgnoreCase(config.getVeinMode())
                 && veinSizeForEvent > 1;
 
+        // C1: Teleport cooldown — skip scoring entirely if the player is still in the grace period.
+        if (config.isTeleportCooldownEnabled()) {
+            PlayerData pd = dataManager.getEntry(player.getUniqueId());
+            if (pd != null && pd.isInTeleportCooldown(System.currentTimeMillis(),
+                    config.getTeleportCooldownSeconds() * 1000L)) {
+                return;
+            }
+        }
+
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
 
             // Apply async weight modifiers (purely multiplicative; no world-state reads).
@@ -215,23 +228,58 @@ public class BlockBreakListener implements Listener {
             long cutoff = now - (config.getWindowMinutes() * 60_000L);
 
             data.purgeExpired(cutoff);
-            data.addEvent(new MineEvent(now, finalIsValuable, weight,
+
+            // C5: Apply mine-gap multiplier based on time since last ore find.
+            double effectiveWeight = weight;
+            if (finalIsValuable && config.isMineGapMultiplierEnabled()) {
+                long lastOre = data.getLastOreTimestamp();
+                long gap = lastOre == 0 ? config.getMineGapMaxMs() : (now - lastOre);
+                double gapMult = config.getMineGapMultiplier(gap);
+                effectiveWeight *= gapMult;
+                data.setLastOreTimestamp(now);
+            }
+
+            data.addEvent(new MineEvent(now, finalIsValuable, effectiveWeight,
                     blockY, veinSizeForEvent,
                     hasSilkTouch, fortuneLevel, efficiencyLevel, toolType));
 
+            // C3: Record event in calibration manager (in learning mode, captures all data).
+            calibrationManager.recordEvent(player.getUniqueId(), finalIsValuable, effectiveWeight);
+
             if (data.getTotalBlocks() < config.getMinSampleSize()) return;
+
+            // C2: Classify mining style periodically.
+            data.classifyMiningStyle();
+
+            // C2: Adjust effective threshold based on mining style.
+            double effectiveThreshold = config.getAlertThreshold();
+            if (finalIsValuable && config.isStyleMultipliersEnabled()) {
+                double styleMult = config.getStyleMultiplier(data.getMiningStyle().name());
+                if (styleMult > 0) {
+                    effectiveThreshold /= styleMult;
+                }
+            }
 
             long   cooldownMs  = config.getCooldownSeconds() * 1000L;
             double ratio       = data.calculateRatio();
-            if (ratio < config.getAlertThreshold()) return;
+            if (ratio < effectiveThreshold) return;
             if (!data.shouldAlert(now, cooldownMs)) return;
 
-            double score      = data.calculateScore();
+            double rawScore   = data.calculateScore();
+            // C4: Apply trust multiplier to the final score.
+            double trustMult  = data.getTrustMultiplier();
+            double finalScore = trustMult != 1.0 ? rawScore * trustMult : rawScore;
+            double finalRatio = data.getTotalBlocks() > 0 ? finalScore / data.getTotalBlocks() : 0;
             int    total      = data.getTotalBlocks();
             String playerName = player.getName();
 
+            // C3: Learning mode — suppress alerts but still track data.
+            if (config.isLearningModeEnabled()) {
+                return;
+            }
+
             plugin.getServer().getScheduler().runTask(plugin, () ->
-                    alertManager.dispatch(playerName, ratio, score, total));
+                    alertManager.dispatch(playerName, finalRatio, finalScore, total));
         });
     }
 

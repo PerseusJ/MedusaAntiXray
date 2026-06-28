@@ -8,6 +8,13 @@ import java.util.List;
 import java.util.UUID;
 
 public class PlayerData {
+
+    public enum MiningStyle {
+        CAVE, BRANCH, STRIP, UNKNOWN
+    }
+
+    private static final int STYLE_CLASSIFY_INTERVAL = 50;
+
     private final UUID playerUuid;
     private final String playerName;
     private final Deque<MineEvent> eventWindow;
@@ -20,6 +27,19 @@ public class PlayerData {
      * Exposed as volatile for visibility across threads; only written under {@code synchronized(this)}.
      */
     private volatile boolean merged = false;
+
+    // C1 — Teleport-cooldown grace period
+    private volatile long lastTeleportTimestamp = 0;
+
+    // C2 — Mining-style classification
+    private volatile MiningStyle miningStyle = MiningStyle.UNKNOWN;
+    private int blocksSinceLastClassification = 0;
+
+    // C4 — Trust tiers
+    private double trustMultiplier = 1.0;
+
+    // C5 — Mine-gap multiplier
+    private volatile long lastOreTimestamp = 0;
 
     public PlayerData(UUID playerUuid, String playerName) {
         this.playerUuid = playerUuid;
@@ -133,5 +153,109 @@ public class PlayerData {
         }
         lastAlertTimestamp = now;
         return true;
+    }
+
+    // =========================================================================
+    // C1 — Teleport cooldown
+    // =========================================================================
+
+    public long getLastTeleportTimestamp() {
+        return lastTeleportTimestamp;
+    }
+
+    public void setLastTeleportTimestamp(long ts) {
+        this.lastTeleportTimestamp = ts;
+    }
+
+    public boolean isInTeleportCooldown(long now, long cooldownMs) {
+        if (cooldownMs <= 0 || lastTeleportTimestamp == 0) return false;
+        return (now - lastTeleportTimestamp) < cooldownMs;
+    }
+
+    // =========================================================================
+    // C2 — Mining-style classification
+    // =========================================================================
+
+    public MiningStyle getMiningStyle() {
+        return miningStyle;
+    }
+
+    public void setMiningStyle(MiningStyle style) {
+        this.miningStyle = style;
+    }
+
+    /**
+     * Periodically classifies this player's mining style based on the current
+     * event window. Called every STYLE_CLASSIFY_INTERVAL blocks.
+     *
+     * <p>Heuristics:
+     * <ul>
+     *   <li><b>CAVE</b> — high ore ratio + high Y variance (player traversing naturally exposed ores)</li>
+     *   <li><b>STRIP</b> — low Y variance (player staying at one level)</li>
+     *   <li><b>BRANCH</b> — moderate ore ratio + moderate Y variance</li>
+     *   <li><b>UNKNOWN</b> — insufficient data</li>
+     * </ul>
+     */
+    public synchronized void classifyMiningStyle() {
+        blocksSinceLastClassification++;
+        if (blocksSinceLastClassification < STYLE_CLASSIFY_INTERVAL) return;
+        blocksSinceLastClassification = 0;
+
+        int total = eventWindow.size();
+        if (total < 20) {
+            miningStyle = MiningStyle.UNKNOWN;
+            return;
+        }
+
+        int valuableCount = 0;
+        double ySum = 0;
+        double ySumSq = 0;
+        for (MineEvent e : eventWindow) {
+            if (e.isValuable()) valuableCount++;
+            ySum += e.y();
+            ySumSq += (double) e.y() * e.y();
+        }
+
+        double oreRatio = (double) valuableCount / total;
+        double yMean = ySum / total;
+        double yVariance = (ySumSq / total) - (yMean * yMean);
+        double yStdDev = Math.sqrt(Math.max(0, yVariance));
+
+        // Cave miners: high ore ratio + high Y variance (exploring caves with exposed ores)
+        if (oreRatio > 0.08 && yStdDev > 15.0) {
+            miningStyle = MiningStyle.CAVE;
+        // Strip miners: very low Y variance (mining at one elevation)
+        } else if (yStdDev < 3.0 && oreRatio > 0.02) {
+            miningStyle = MiningStyle.STRIP;
+        // Branch miners: moderate variance and ratio
+        } else if (yStdDev >= 3.0 && yStdDev <= 15.0) {
+            miningStyle = MiningStyle.BRANCH;
+        } else {
+            miningStyle = MiningStyle.UNKNOWN;
+        }
+    }
+
+    // =========================================================================
+    // C4 — Trust multiplier
+    // =========================================================================
+
+    public double getTrustMultiplier() {
+        return trustMultiplier;
+    }
+
+    public void setTrustMultiplier(double trustMultiplier) {
+        this.trustMultiplier = trustMultiplier;
+    }
+
+    // =========================================================================
+    // C5 — Mine-gap tracking
+    // =========================================================================
+
+    public long getLastOreTimestamp() {
+        return lastOreTimestamp;
+    }
+
+    public void setLastOreTimestamp(long ts) {
+        this.lastOreTimestamp = ts;
     }
 }

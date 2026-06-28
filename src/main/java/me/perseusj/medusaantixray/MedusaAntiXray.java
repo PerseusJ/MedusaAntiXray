@@ -5,6 +5,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 import me.perseusj.medusaantixray.commands.MedusaCommand;
 import me.perseusj.medusaantixray.listeners.BlockBreakListener;
 import me.perseusj.medusaantixray.listeners.SessionListener;
+import me.perseusj.medusaantixray.managers.CalibrationManager;
 import me.perseusj.medusaantixray.managers.ConfigManager;
 import me.perseusj.medusaantixray.managers.DataManager;
 import me.perseusj.medusaantixray.managers.AlertManager;
@@ -16,6 +17,7 @@ public class MedusaAntiXray extends JavaPlugin {
     private DatabaseManager databaseManager;
     private DataManager dataManager;
     private AlertManager alertManager;
+    private CalibrationManager calibrationManager;
 
     @Override
     public void onEnable() {
@@ -31,9 +33,10 @@ public class MedusaAntiXray extends JavaPlugin {
 
         dataManager = new DataManager(databaseManager, configManager);
         alertManager = new AlertManager(configManager);
+        calibrationManager = new CalibrationManager(configManager, getLogger());
 
-        getServer().getPluginManager().registerEvents(new SessionListener(dataManager), this);
-        getServer().getPluginManager().registerEvents(new BlockBreakListener(this, configManager, dataManager, alertManager), this);
+        getServer().getPluginManager().registerEvents(new SessionListener(dataManager, configManager), this);
+        getServer().getPluginManager().registerEvents(new BlockBreakListener(this, configManager, dataManager, alertManager, calibrationManager), this);
 
         MedusaCommand command = new MedusaCommand(configManager, dataManager);
         getCommand("medusa").setExecutor(command);
@@ -74,6 +77,14 @@ public class MedusaAntiXray extends JavaPlugin {
                     + (retryIntervalSeconds > 0
                         ? " Will retry in " + retryIntervalSeconds + "s."
                         : " Retries disabled (retry-interval-seconds=0)."));
+        }
+
+        // C3: Start learning mode if enabled; schedule periodic tick.
+        if (configManager.isLearningModeEnabled()) {
+            calibrationManager.start();
+            long tickInterval = 20L * 60; // Check every minute
+            getServer().getScheduler().runTaskTimerAsynchronously(this,
+                    () -> calibrationManager.tick(), tickInterval, tickInterval);
         }
 
         getLogger().info("Medusa-Anti-Xray has been enabled!");

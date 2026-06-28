@@ -19,7 +19,8 @@ public class ConfigManager {
 
     /** All top-level keys present in the default config.yml. */
     private static final Set<String> KNOWN_TOP_LEVEL_KEYS =
-            Set.of("detection", "worlds", "alerts", "messages", "database");
+            Set.of("detection", "worlds", "alerts", "messages", "database",
+                    "false-positive-guards", "trust", "learning-mode");
 
     // -------------------------------------------------------------------------
     // B1: Depth-normalization helper record (package-private for tests if needed)
@@ -288,6 +289,132 @@ public class ConfigManager {
     }
 
     // =========================================================================
+    // C1 — Teleport-cooldown grace period
+    // =========================================================================
+
+    public boolean isTeleportCooldownEnabled() {
+        return getTeleportCooldownSeconds() > 0;
+    }
+
+    public int getTeleportCooldownSeconds() {
+        return config.getInt("false-positive-guards.teleport-cooldown-seconds", 10);
+    }
+
+    // =========================================================================
+    // C2 — Mining-style classification multipliers
+    // =========================================================================
+
+    public boolean isStyleMultipliersEnabled() {
+        return config.getBoolean("detection.style-multipliers.enabled", true);
+    }
+
+    public double getStyleMultiplier(String style) {
+        String path = "detection.style-multipliers." + style.toLowerCase();
+        double defaultValue = switch (style.toLowerCase()) {
+            case "cave"    -> 0.6;
+            case "branch"  -> 1.0;
+            case "strip"   -> 1.1;
+            default        -> 1.0;
+        };
+        return config.getDouble(path, defaultValue);
+    }
+
+    // =========================================================================
+    // C3 — Learning / baseline calibration mode
+    // =========================================================================
+
+    public boolean isLearningModeEnabled() {
+        return config.getBoolean("learning-mode.enabled", false);
+    }
+
+    public int getLearningModeDurationMinutes() {
+        return config.getInt("learning-mode.duration-minutes", 1440);
+    }
+
+    public boolean isLearningModeLogOutput() {
+        return config.getBoolean("learning-mode.log-output", true);
+    }
+
+    public boolean isLearningModePersist() {
+        return config.getBoolean("learning-mode.persist", true);
+    }
+
+    public int getLearningModeRecommendPercentile() {
+        return config.getInt("learning-mode.recommend-percentile", 99);
+    }
+
+    // =========================================================================
+    // C4 — Trust tiers & player whitelist
+    // =========================================================================
+
+    public double getTrustDefaultMultiplier() {
+        return config.getDouble("trust.default", 1.0);
+    }
+
+    /**
+     * Returns an ordered map of permission node → trust multiplier.
+     * First match wins when checking a player's permissions.
+     */
+    public Map<String, Double> getTrustPermMultipliers() {
+        ConfigurationSection section = config.getConfigurationSection("trust.perm-multipliers");
+        if (section == null) return Map.of();
+        Map<String, Double> result = new LinkedHashMap<>();
+        for (String key : section.getKeys(false)) {
+            result.put(key, section.getDouble(key));
+        }
+        return result;
+    }
+
+    /**
+     * Returns a map of player UUID string → trust multiplier from the whitelist.
+     */
+    public Map<String, Double> getTrustPlayers() {
+        ConfigurationSection section = config.getConfigurationSection("trust.players");
+        if (section == null) return Map.of();
+        Map<String, Double> result = new LinkedHashMap<>();
+        for (String key : section.getKeys(false)) {
+            result.put(key, section.getDouble(key));
+        }
+        return result;
+    }
+
+    // =========================================================================
+    // C5 — Mine-gap multiplier (vein-first-discovery time metric)
+    // =========================================================================
+
+    public boolean isMineGapMultiplierEnabled() {
+        return config.getBoolean("detection.mine-gap-multiplier.enabled", true);
+    }
+
+    public long getMineGapMinMs() {
+        return config.getLong("detection.mine-gap-multiplier.min-gap-ms", 3000);
+    }
+
+    public long getMineGapMaxMs() {
+        return config.getLong("detection.mine-gap-multiplier.max-gap-ms", 120000);
+    }
+
+    public double getMineGapMaxMultiplier() {
+        return config.getDouble("detection.mine-gap-multiplier.max-multiplier", 2.0);
+    }
+
+    /**
+     * Returns the gap multiplier for a given inter-ore time gap.
+     * Linear interpolation between min-gap-ms (max multiplier) and max-gap-ms (1.0).
+     * Gaps longer than max-gap-ms return 1.0 (no effect).
+     * Gaps shorter than min-gap-ms return max-multiplier.
+     */
+    public double getMineGapMultiplier(long gapMs) {
+        long minGap = getMineGapMinMs();
+        long maxGap = getMineGapMaxMs();
+        double maxMult = getMineGapMaxMultiplier();
+        if (gapMs <= minGap) return maxMult;
+        if (gapMs >= maxGap) return 1.0;
+        double t = (double) (gapMs - minGap) / (double) (maxGap - minGap);
+        return maxMult - t * (maxMult - 1.0);
+    }
+
+    // =========================================================================
     // Overworld settings
     // =========================================================================
 
@@ -484,6 +611,66 @@ public class ConfigManager {
             if (threshold < 0 || threshold > 6) {
                 logger.warning("[Medusa] Config warning: detection.exposure-scoring.hidden-threshold-faces="
                         + threshold + " is out of range [0, 6].");
+            }
+        }
+
+        // --- C1: teleport cooldown ---
+        if (isTeleportCooldownEnabled() && getTeleportCooldownSeconds() < 0) {
+            logger.warning("[Medusa] Config warning: false-positive-guards.teleport-cooldown-seconds must be >= 0.");
+        }
+
+        // --- C2: style multipliers ---
+        if (isStyleMultipliersEnabled()) {
+            String[] styles = {"cave", "branch", "strip", "unknown"};
+            for (String s : styles) {
+                double m = getStyleMultiplier(s);
+                if (m < 0) {
+                    logger.warning("[Medusa] Config warning: detection.style-multipliers." + s
+                            + "=" + m + " must be >= 0.");
+                }
+            }
+        }
+
+        // --- C3: learning mode ---
+        if (isLearningModeEnabled()) {
+            if (getLearningModeDurationMinutes() <= 0) {
+                logger.warning("[Medusa] Config warning: learning-mode.duration-minutes must be > 0.");
+            }
+            int pct = getLearningModeRecommendPercentile();
+            if (pct < 1 || pct > 100) {
+                logger.warning("[Medusa] Config warning: learning-mode.recommend-percentile="
+                        + pct + " is out of range [1, 100].");
+            }
+        }
+
+        // --- C4: trust ---
+        if (getTrustDefaultMultiplier() < 0) {
+            logger.warning("[Medusa] Config warning: trust.default must be >= 0.");
+        }
+        for (Map.Entry<String, Double> e : getTrustPermMultipliers().entrySet()) {
+            if (e.getValue() < 0) {
+                logger.warning("[Medusa] Config warning: trust.perm-multipliers." + e.getKey() + " must be >= 0.");
+            }
+        }
+        for (Map.Entry<String, Double> e : getTrustPlayers().entrySet()) {
+            if (e.getValue() < 0) {
+                logger.warning("[Medusa] Config warning: trust.players." + e.getKey() + " must be >= 0.");
+            }
+        }
+
+        // --- C5: mine-gap multiplier ---
+        if (isMineGapMultiplierEnabled()) {
+            long minGap = getMineGapMinMs();
+            long maxGap = getMineGapMaxMs();
+            double maxMult = getMineGapMaxMultiplier();
+            if (minGap < 0) {
+                logger.warning("[Medusa] Config warning: detection.mine-gap-multiplier.min-gap-ms must be >= 0.");
+            }
+            if (maxGap <= minGap) {
+                logger.warning("[Medusa] Config warning: detection.mine-gap-multiplier.max-gap-ms must be > min-gap-ms.");
+            }
+            if (maxMult < 1.0) {
+                logger.warning("[Medusa] Config warning: detection.mine-gap-multiplier.max-multiplier must be >= 1.0.");
             }
         }
 
