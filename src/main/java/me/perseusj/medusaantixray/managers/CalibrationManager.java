@@ -11,6 +11,7 @@ public class CalibrationManager {
 
     private final ConfigManager config;
     private final Logger logger;
+    private final DatabaseManager database;
 
     private volatile long startTime;
     private final ConcurrentHashMap<UUID, PlayerStats> playerStats = new ConcurrentHashMap<>();
@@ -20,9 +21,13 @@ public class CalibrationManager {
         double totalScore;
     }
 
-    public CalibrationManager(ConfigManager config, Logger logger) {
-        this.config = config;
-        this.logger = logger;
+    /**
+     * @param database may be {@code null} when the database is unavailable; persistence is skipped silently.
+     */
+    public CalibrationManager(ConfigManager config, Logger logger, DatabaseManager database) {
+        this.config   = config;
+        this.logger   = logger;
+        this.database = database;
     }
 
     public void start() {
@@ -50,18 +55,18 @@ public class CalibrationManager {
     public void tick() {
         if (!config.isLearningModeEnabled() || startTime == 0) return;
 
-        long elapsed = System.currentTimeMillis() - startTime;
+        long elapsed    = System.currentTimeMillis() - startTime;
         long durationMs = config.getLearningModeDurationMinutes() * 60_000L;
         if (elapsed < durationMs) return;
 
         List<Double> ratios = new ArrayList<>();
-        long globalTotalBlocks = 0;
-        double globalTotalScore = 0;
+        long   globalTotalBlocks = 0;
+        double globalTotalScore  = 0;
 
         for (PlayerStats stats : playerStats.values()) {
             synchronized (stats) {
                 globalTotalBlocks += stats.totalBlocks;
-                globalTotalScore += stats.totalScore;
+                globalTotalScore  += stats.totalScore;
                 if (stats.totalBlocks > 0) {
                     ratios.add(stats.totalScore / stats.totalBlocks);
                 }
@@ -79,16 +84,30 @@ public class CalibrationManager {
 
         double recommended = Math.max(meanRatio * 2, percentileRatio);
 
-        logger.info("[Medusa] ===== Calibration Complete =====");
-        logger.info("[Medusa] Players tracked: " + playerStats.size());
-        logger.info("[Medusa] Total blocks mined: " + globalTotalBlocks);
-        logger.info("[Medusa] Mean ratio: " + String.format("%.3f", meanRatio));
-        logger.info("[Medusa] " + percentile + "th percentile: " + String.format("%.3f", percentileRatio));
-        logger.info("[Medusa] Recommended alert-threshold: " + String.format("%.3f", recommended));
-        logger.info("[Medusa] ================================");
+        // C3: Log results only when log-output is enabled.
+        if (config.isLearningModeLogOutput()) {
+            logger.info("[Medusa] ===== Calibration Complete =====");
+            logger.info("[Medusa] Players tracked: " + playerStats.size());
+            logger.info("[Medusa] Total blocks mined: " + globalTotalBlocks);
+            logger.info("[Medusa] Mean ratio: " + String.format("%.3f", meanRatio));
+            logger.info("[Medusa] " + percentile + "th percentile: " + String.format("%.3f", percentileRatio));
+            logger.info("[Medusa] Recommended alert-threshold: " + String.format("%.3f", recommended));
+            logger.info("[Medusa] ================================");
+        }
 
-        if (config.isLearningModePersist()) {
-            logger.info("[Medusa] (Learning mode persist to DB not yet implemented — log only)");
+        // C3: Persist calibration result to the database when enabled.
+        if (config.isLearningModePersist() && database != null && database.isAvailable()) {
+            database.saveCalibrationResultAsync(
+                    System.currentTimeMillis(),
+                    playerStats.size(),
+                    globalTotalBlocks,
+                    meanRatio,
+                    percentile,
+                    percentileRatio,
+                    recommended);
+            if (config.isLearningModeLogOutput()) {
+                logger.info("[Medusa] Calibration result saved to database.");
+            }
         }
 
         startTime = 0;

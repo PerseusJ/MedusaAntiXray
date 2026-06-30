@@ -15,8 +15,17 @@ permissions:
     description: Access to /medusa management commands
     default: op
   medusa.staff:
-    description: Receive Medusa X-ray detection alerts
+    description: Receive Medusa X-ray detection alerts (all tiers)
     default: op
   medusa.bypass:
     description: Exempt from Medusa detection (for trusted staff)
+    default: false
+  medusa.trust.high:
+    description: "Trust tier high — score multiplier: 0.25"
+    default: false
+  medusa.trust.medium:
+    description: "Trust tier medium — score multiplier: 0.5"
+    default: false
+  medusa.trust.low:
+    description: "Trust tier low — score multiplier: 0.75"
     default: false

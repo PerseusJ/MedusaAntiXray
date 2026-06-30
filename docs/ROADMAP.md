@@ -62,7 +62,7 @@ within its phase — it either fixes a known bug or unblocks later work.
 
 ---
 
-## Phase A — v1.1: Stability & Correctness [COMPLETED]
+## Phase A — v1.2: Stability & Correctness [COMPLETED]
 
 *Bug fixes, thread-safety hardening, and operational reliability improvements.*
 *No new features; every item reduces risk for the phases that follow.*
@@ -262,7 +262,7 @@ database:
 
 ---
 
-## Phase B — v1.2: Detection Accuracy [COMPLETED]
+## Phase B — v1.3: Detection Accuracy [COMPLETED]
 
 *Improvements to the core statistical model — better signal, less noise.*
 
@@ -573,7 +573,7 @@ worlds:
 
 ---
 
-## Phase C — v1.3: False-Positive Reduction
+## Phase C — v1.4: False-Positive Reduction [COMPLETED]
 
 *Techniques to lower the false-positive rate without weakening true-positive
 detection.*
@@ -801,7 +801,7 @@ detection:
 
 ---
 
-## Phase D — v1.4: Alerting & Notifications
+## Phase D — v1.5: Alerting & Notifications [COMPLETED]
 
 *Expanding how, where, and with what detail staff are notified of detections.*
 
@@ -1084,7 +1084,7 @@ alerts:
 
 ---
 
-## Phase E — v1.5: Commands & UX
+## Phase E — v1.6: Commands & UX
 
 *Expanding the command interface and adding quality-of-life tooling for staff.*
 

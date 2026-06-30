@@ -32,8 +32,8 @@ public class MedusaAntiXray extends JavaPlugin {
         databaseManager.init();
 
         dataManager = new DataManager(databaseManager, configManager);
-        alertManager = new AlertManager(configManager);
-        calibrationManager = new CalibrationManager(configManager, getLogger());
+        alertManager = new AlertManager(configManager, databaseManager, this);
+        calibrationManager = new CalibrationManager(configManager, getLogger(), databaseManager);
 
         getServer().getPluginManager().registerEvents(new SessionListener(dataManager, configManager), this);
         getServer().getPluginManager().registerEvents(new BlockBreakListener(this, configManager, dataManager, alertManager, calibrationManager), this);
@@ -49,15 +49,20 @@ public class MedusaAntiXray extends JavaPlugin {
             getServer().getScheduler().runTaskTimerAsynchronously(this, () -> dataManager.saveAll(), ticks, ticks);
         }
 
-        // A3: Schedule daily data-retention purge (runs once every 24 hours asynchronously).
-        int retentionDays = configManager.getRetentionDays();
-        if (retentionDays > 0) {
-            long purgeIntervalTicks = 20L * 60 * 60 * 24; // 24 hours in ticks
-            getServer().getScheduler().runTaskTimerAsynchronously(this, () -> {
-                long cutoffMs = System.currentTimeMillis() - ((long) retentionDays * 24 * 60 * 60 * 1000L);
+        // A3 + D1: Schedule combined daily data-retention purge (events + alerts).
+        long purgeIntervalTicks = 20L * 60 * 60 * 24; // 24 hours in ticks
+        getServer().getScheduler().runTaskTimerAsynchronously(this, () -> {
+            int evtDays = configManager.getRetentionDays();
+            if (evtDays > 0) {
+                long cutoffMs = System.currentTimeMillis() - ((long) evtDays * 24 * 60 * 60 * 1000L);
                 databaseManager.purgeExpiredGlobal(cutoffMs);
-            }, purgeIntervalTicks, purgeIntervalTicks);
-        }
+            }
+            int alertDays = configManager.getHistoryRetentionDays();
+            if (alertDays > 0) {
+                long alertCutoffMs = System.currentTimeMillis() - ((long) alertDays * 24 * 60 * 60 * 1000L);
+                databaseManager.purgeAlertsOlderThan(alertCutoffMs);
+            }
+        }, purgeIntervalTicks, purgeIntervalTicks);
 
         // A5: Schedule periodic DB reconnection attempts when the database is unavailable.
         int retryIntervalSeconds = configManager.getRetryIntervalSeconds();
@@ -85,6 +90,14 @@ public class MedusaAntiXray extends JavaPlugin {
             long tickInterval = 20L * 60; // Check every minute
             getServer().getScheduler().runTaskTimerAsynchronously(this,
                     () -> calibrationManager.tick(), tickInterval, tickInterval);
+        }
+
+        // D6: Schedule periodic digest report if enabled.
+        if (configManager.isDigestEnabled()) {
+            long digestTicks = (long) configManager.getDigestIntervalMinutes() * 60L * 20L;
+            getServer().getScheduler().runTaskTimerAsynchronously(this,
+                    () -> alertManager.dispatchDigest(dataManager.getAllEntries()),
+                    digestTicks, digestTicks);
         }
 
         getLogger().info("Medusa-Anti-Xray has been enabled!");

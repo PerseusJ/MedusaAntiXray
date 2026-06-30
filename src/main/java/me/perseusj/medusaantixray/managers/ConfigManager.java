@@ -378,6 +378,19 @@ public class ConfigManager {
         return result;
     }
 
+    /**
+     * C4: Writes {@code trust.players.<uuid>} into the live config and persists it to disk.
+     * Pass {@code null} as the multiplier to remove a player from the whitelist.
+     *
+     * @param uuid       the player's UUID string
+     * @param multiplier the trust multiplier (0.0 = fully exempt), or {@code null} to remove
+     */
+    public void setTrustPlayer(String uuid, Double multiplier) {
+        config.set("trust.players." + uuid, multiplier);
+        plugin.saveConfig();
+    }
+
+
     // =========================================================================
     // C5 — Mine-gap multiplier (vein-first-discovery time metric)
     // =========================================================================
@@ -674,6 +687,53 @@ public class ConfigManager {
             }
         }
 
+        // --- D1: alert history ---
+        if (getHistoryRetentionDays() < 0) {
+            logger.warning("[Medusa] Config warning: alerts.history-retention-days must be >= 0.");
+        }
+
+        // --- D2: tier threshold ordering ---
+        double warnThreshold  = getTierThreshold("warning");
+        double tierAlertThreshold = getTierThreshold("alert");
+        double critThreshold  = getTierThreshold("critical");
+        if (warnThreshold >= tierAlertThreshold) {
+            logger.warning("[Medusa] Config warning: alerts.tiers.warning.threshold (" + warnThreshold
+                    + ") >= alerts.tiers.alert.threshold (" + tierAlertThreshold
+                    + "). WARNING tier may never resolve separately from ALERT.");
+        }
+        if (tierAlertThreshold >= critThreshold) {
+            logger.warning("[Medusa] Config warning: alerts.tiers.alert.threshold (" + tierAlertThreshold
+                    + ") >= alerts.tiers.critical.threshold (" + critThreshold
+                    + "). ALERT tier may never resolve separately from CRITICAL.");
+        }
+
+        // --- D5: boss-bar ---
+        if (isAlertModeBossBar()) {
+            String color = getAlertBossBarColor();
+            try {
+                org.bukkit.boss.BarColor.valueOf(color.toUpperCase());
+            } catch (IllegalArgumentException e) {
+                logger.warning("[Medusa] Config warning: alerts.alert-modes.boss-bar-color \"" + color
+                        + "\" is not a valid BarColor (PINK, BLUE, RED, GREEN, YELLOW, PURPLE, WHITE).");
+            }
+            if (getAlertBossBarSeconds() < 1) {
+                logger.warning("[Medusa] Config warning: alerts.alert-modes.boss-bar-seconds must be >= 1.");
+            }
+        }
+
+        // --- D6: digest ---
+        if (isDigestEnabled()) {
+            if (getDigestIntervalMinutes() < 1) {
+                logger.warning("[Medusa] Config warning: alerts.digest.interval-minutes must be >= 1.");
+            }
+            if (getDigestTopN() < 1) {
+                logger.warning("[Medusa] Config warning: alerts.digest.top-n must be >= 1.");
+            }
+            if (getDigestMinRatio() < 0) {
+                logger.warning("[Medusa] Config warning: alerts.digest.min-ratio must be >= 0.");
+            }
+        }
+
         // --- unknown top-level keys ---
         if (config.getKeys(false) != null) {
             for (String key : config.getKeys(false)) {
@@ -685,11 +745,11 @@ public class ConfigManager {
         }
     }
 
-    /** Logs a warning for each entry in {@code names} that is not a valid {@link Material}. */
+    /** Logs a warning for each entry in {@code names} that is not a valid {@link org.bukkit.Material}. */
     private void validateMaterials(Logger logger, String path, List<String> names) {
         for (String name : names) {
             try {
-                Material.valueOf(name.toUpperCase());
+                org.bukkit.Material.valueOf(name.toUpperCase());
             } catch (IllegalArgumentException e) {
                 logger.warning("[Medusa] Config warning: \"" + name
                         + "\" in " + path + " is not a valid Material name.");
@@ -710,4 +770,163 @@ public class ConfigManager {
                         + " in worlds." + worldName + ".tracked-ores must be >= 0.");
         }
     }
+
+    // =========================================================================
+    // D1 — Alert history
+    // =========================================================================
+
+    /** Whether to persist each dispatched alert to the {@code medusa_alerts} DB table. */
+    public boolean isPersistHistory()        { return config.getBoolean("alerts.persist-history", true); }
+    /** Days to retain alert history rows (0 = keep forever). */
+    public int     getHistoryRetentionDays() { return config.getInt("alerts.history-retention-days", 90); }
+
+    // =========================================================================
+    // D2 — Escalation tiers
+    // =========================================================================
+
+    /**
+     * Returns the minimum ratio required to trigger the given {@code tier}.
+     * Defaults: warning=0.06, alert=detection.alert-threshold (backward compat), critical=0.25.
+     */
+    public double getTierThreshold(String tier) {
+        double def = switch (tier.toLowerCase()) {
+            case "warning"  -> 0.06;
+            case "alert"    -> getAlertThreshold(); // falls back to detection.alert-threshold
+            case "critical" -> 0.25;
+            default         -> 0.08;
+        };
+        return config.getDouble("alerts.tiers." + tier.toLowerCase() + ".threshold", def);
+    }
+
+    /** Returns the message template for the given tier. Falls back to the legacy alert-message. */
+    public String getTierMessage(String tier) {
+        String def = switch (tier.toLowerCase()) {
+            case "warning"  -> "{prefix} &e\u26a0 {player} &7shows unusual mining \u2014 Ratio: &e{ratio}% &7({score} pts / {total} blocks)";
+            case "critical" -> "{prefix} &4&l\u26a0 CRITICAL: {player} &7has extreme ratio! &4Ratio: &f{ratio}% &7({score} pts / {total} blocks)";
+            default         -> getAlertMessage();
+        };
+        return config.getString("alerts.tiers." + tier.toLowerCase() + ".message", def);
+    }
+
+    /** Returns the permission required to receive alerts for the given tier. */
+    public String getTierPermission(String tier) {
+        return config.getString("alerts.tiers." + tier.toLowerCase() + ".permission",
+                getStaffPermission());
+    }
+
+    /** Returns the Bukkit {@link org.bukkit.Sound} name for the given tier, or empty string if none. */
+    public String getTierSound(String tier) {
+        String def = switch (tier.toLowerCase()) {
+            case "warning"  -> "BLOCK_NOTE_BLOCK_BELL";
+            case "critical" -> "ENTITY_WITHER_SPAWN";
+            default         -> "BLOCK_NOTE_BLOCK_PLING";
+        };
+        return config.getString("alerts.tiers." + tier.toLowerCase() + ".sound", def);
+    }
+
+    /** Returns the volume for the given tier's sound effect. */
+    public float getTierVolume(String tier) {
+        double def = "warning".equalsIgnoreCase(tier) ? 0.5 : 1.0;
+        return (float) config.getDouble("alerts.tiers." + tier.toLowerCase() + ".volume", def);
+    }
+
+    /** Returns the pitch for the given tier's sound effect. */
+    public float getTierPitch(String tier) {
+        return (float) config.getDouble("alerts.tiers." + tier.toLowerCase() + ".pitch", 1.0);
+    }
+
+    /**
+     * D2: Resolves the highest alert tier whose threshold the {@code ratio} meets.
+     * Returns {@code null} when the ratio is below all tier thresholds (no alert).
+     *
+     * @param ratio the style-adjusted detection ratio
+     * @return {@link AlertTier#CRITICAL}, {@link AlertTier#ALERT}, {@link AlertTier#WARNING},
+     *         or {@code null}
+     */
+    public AlertTier resolveTier(double ratio) {
+        if (ratio >= getTierThreshold("critical")) return AlertTier.CRITICAL;
+        if (ratio >= getTierThreshold("alert"))    return AlertTier.ALERT;
+        if (ratio >= getTierThreshold("warning"))  return AlertTier.WARNING;
+        return null;
+    }
+
+    // =========================================================================
+    // D3 — Clickable chat components
+    // =========================================================================
+
+    /** Whether to send Adventure component messages with clickable [TP] buttons. */
+    public boolean isClickableComponentsEnabled() {
+        return config.getBoolean("alerts.clickable-components.enabled", true);
+    }
+    /** The command run when the [TP] button is clicked; {@code {player}} is replaced. */
+    public String getClickableTpCommand() {
+        return config.getString("alerts.clickable-components.tp-command", "/tp {player}");
+    }
+    /** Hover text for the [TP] button; {@code {player}} is replaced. */
+    public String getClickableTpHoverText() {
+        return config.getString("alerts.clickable-components.tp-hover-text",
+                "&7Click to teleport to &f{player}");
+    }
+    /** Hover text for the player-name portion of the alert. */
+    public String getClickableCheckHoverText() {
+        return config.getString("alerts.clickable-components.check-hover-text",
+                "&7Click for detailed stats");
+    }
+
+    // =========================================================================
+    // D4 — Webhooks
+    // =========================================================================
+
+    /** Whether webhook notifications are enabled. */
+    public boolean      isWebhooksEnabled()    { return config.getBoolean("alerts.webhooks.enabled", false); }
+    /** Tier names (lowercase) that should trigger webhooks. */
+    public List<String> getWebhookTiers()      { return config.getStringList("alerts.webhooks.tiers"); }
+    /** Discord webhook URL; empty string = disabled. */
+    public String       getWebhookDiscordUrl() { return config.getString("alerts.webhooks.discord-url", ""); }
+    /** Slack webhook URL; empty string = disabled. */
+    public String       getWebhookSlackUrl()   { return config.getString("alerts.webhooks.slack-url", ""); }
+
+    // =========================================================================
+    // D5 — Alert modes (sound, title, boss-bar)
+    // =========================================================================
+
+    /** Whether to send a chat message for each alert. */
+    public boolean isAlertModeChat()    { return config.getBoolean("alerts.alert-modes.chat",     true);  }
+    /** Whether to play a sound for each alert. */
+    public boolean isAlertModeSound()   { return config.getBoolean("alerts.alert-modes.sound",    true);  }
+    /** Whether to show a title/subtitle for each alert. */
+    public boolean isAlertModeTitle()   { return config.getBoolean("alerts.alert-modes.title",    false); }
+    /** Whether to show a boss bar for each alert. */
+    public boolean isAlertModeBossBar() { return config.getBoolean("alerts.alert-modes.boss-bar", false); }
+
+    /** Title fade-in time in ticks. */
+    public int    getAlertTitleFadeIn()   { return config.getInt("alerts.alert-modes.title-fade-in-ticks",  10); }
+    /** Title stay time in ticks. */
+    public int    getAlertTitleStay()     { return config.getInt("alerts.alert-modes.title-stay-ticks",     70); }
+    /** Title fade-out time in ticks. */
+    public int    getAlertTitleFadeOut()  { return config.getInt("alerts.alert-modes.title-fade-out-ticks", 20); }
+
+    /** Boss-bar color name (e.g. {@code "RED"}). Must be a valid {@link org.bukkit.boss.BarColor}. */
+    public String getAlertBossBarColor()   { return config.getString("alerts.alert-modes.boss-bar-color",   "RED"); }
+    /** Seconds to display the boss bar before auto-removal. */
+    public int    getAlertBossBarSeconds() { return config.getInt("alerts.alert-modes.boss-bar-seconds", 5); }
+
+    // =========================================================================
+    // D6 — Periodic digest
+    // =========================================================================
+
+    /** Whether to schedule periodic digest reports. */
+    public boolean isDigestEnabled()        { return config.getBoolean("alerts.digest.enabled",          false); }
+    /** Minutes between digest broadcasts. */
+    public int     getDigestIntervalMinutes(){ return config.getInt("alerts.digest.interval-minutes",     15);    }
+    /** Maximum number of suspects to include in each digest. */
+    public int     getDigestTopN()          { return config.getInt("alerts.digest.top-n",                 5);     }
+    /** Minimum ratio for a player to appear in the digest. */
+    public double  getDigestMinRatio()      { return config.getDouble("alerts.digest.min-ratio",          0.04);  }
+    /** Message template for the digest header; supports {@code {prefix}}, {@code {n}}, {@code {entries}}. */
+    public String  getDigestMessage()       { return config.getString("alerts.digest.message",
+            "{prefix} &7Top {n} suspects:\n{entries}"); }
+    /** Format for each digest entry; supports {@code {player}}, {@code {ratio}}, {@code {score}}, {@code {total}}. */
+    public String  getDigestEntryFormat()   { return config.getString("alerts.digest.entry-format",
+            "  &c{player} &7\u2014 Ratio: &c{ratio}% &7({score} pts / {total} blocks)"); }
 }

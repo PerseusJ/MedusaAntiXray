@@ -135,9 +135,20 @@ public class MedusaCommand implements CommandExecutor, TabCompleter {
                 return true;
             }
             target.setTrustMultiplier(multiplier);
-            sender.sendMessage(Utils.colorize("&aTrust multiplier for &f" + target.getPlayerName()
-                    + " &aset to &c" + String.format("%.2f", multiplier)
-                    + "&a. (In-memory only — use config.yml for persistence.)"));
+
+            // C4: Persist to config.yml so the setting survives restarts.
+            // Resolve UUID from the online player first; fall back to in-memory note if offline.
+            Player onlinePlayer = Bukkit.getPlayerExact(target.getPlayerName());
+            if (onlinePlayer != null) {
+                config.setTrustPlayer(onlinePlayer.getUniqueId().toString(), multiplier);
+                sender.sendMessage(Utils.colorize("&aTrust multiplier for &f" + target.getPlayerName()
+                        + " &aset to &c" + String.format("%.2f", multiplier)
+                        + "&a and saved to config.yml."));
+            } else {
+                sender.sendMessage(Utils.colorize("&aTrust multiplier for &f" + target.getPlayerName()
+                        + " &aset to &c" + String.format("%.2f", multiplier)
+                        + "&a (in-memory; player is offline — add UUID manually to trust.players in config.yml for persistence)."));
+            }
             return true;
         }
 

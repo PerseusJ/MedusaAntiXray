@@ -5,6 +5,7 @@ import me.perseusj.medusaantixray.data.OreWeight;
 import me.perseusj.medusaantixray.data.PlayerData;
 import me.perseusj.medusaantixray.data.VeinContext;
 import me.perseusj.medusaantixray.managers.AlertManager;
+import me.perseusj.medusaantixray.managers.AlertTier;
 import me.perseusj.medusaantixray.managers.CalibrationManager;
 import me.perseusj.medusaantixray.managers.ConfigManager;
 import me.perseusj.medusaantixray.managers.DataManager;
@@ -189,6 +190,10 @@ public class BlockBreakListener implements Listener {
             }
         }
 
+        // Capture world name and UUID synchronously before entering the async lambda.
+        final String capturedWorldName = block.getWorld().getName();
+        final UUID   playerUuid        = player.getUniqueId();
+
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
 
             // Apply async weight modifiers (purely multiplicative; no world-state reads).
@@ -251,18 +256,21 @@ public class BlockBreakListener implements Listener {
             // C2: Classify mining style periodically.
             data.classifyMiningStyle();
 
-            // C2: Adjust effective threshold based on mining style.
-            double effectiveThreshold = config.getAlertThreshold();
-            if (finalIsValuable && config.isStyleMultipliersEnabled()) {
+            // D2: Resolve alert tier using style-adjusted ratio.
+            // Applying the style multiplier to ratio is mathematically equivalent to
+            // the previous approach of dividing the threshold by styleMult.
+            double ratio = data.calculateRatio();
+            double styleAdjustedRatio = ratio;
+            if (config.isStyleMultipliersEnabled()) {
                 double styleMult = config.getStyleMultiplier(data.getMiningStyle().name());
                 if (styleMult > 0) {
-                    effectiveThreshold /= styleMult;
+                    styleAdjustedRatio = ratio * styleMult;
                 }
             }
+            AlertTier tier = config.resolveTier(styleAdjustedRatio);
+            if (tier == null) return;
 
-            long   cooldownMs  = config.getCooldownSeconds() * 1000L;
-            double ratio       = data.calculateRatio();
-            if (ratio < effectiveThreshold) return;
+            long cooldownMs = config.getCooldownSeconds() * 1000L;
             if (!data.shouldAlert(now, cooldownMs)) return;
 
             double rawScore   = data.calculateScore();
@@ -279,7 +287,8 @@ public class BlockBreakListener implements Listener {
             }
 
             plugin.getServer().getScheduler().runTask(plugin, () ->
-                    alertManager.dispatch(playerName, finalRatio, finalScore, total));
+                    alertManager.dispatch(playerUuid, playerName, finalRatio, finalScore,
+                            total, capturedWorldName, tier));
         });
     }
 

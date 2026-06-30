@@ -42,6 +42,47 @@ public class DatabaseManager {
     private static final String DELETE_EXPIRED_GLOBAL =
             "DELETE FROM medusa_events WHERE timestamp < ?";
 
+    // C3 — Calibration result persistence.
+    private static final String CREATE_CALIBRATION_TABLE =
+            "CREATE TABLE IF NOT EXISTS medusa_calibration (" +
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+            "timestamp BIGINT NOT NULL, " +
+            "players_tracked INTEGER NOT NULL, " +
+            "total_blocks BIGINT NOT NULL, " +
+            "mean_ratio DOUBLE NOT NULL, " +
+            "percentile INTEGER NOT NULL, " +
+            "percentile_ratio DOUBLE NOT NULL, " +
+            "recommended_threshold DOUBLE NOT NULL)";
+    private static final String CREATE_CALIBRATION_INDEX =
+            "CREATE INDEX IF NOT EXISTS idx_medusa_calibration_ts ON medusa_calibration(timestamp)";
+    private static final String INSERT_CALIBRATION =
+            "INSERT INTO medusa_calibration " +
+            "(timestamp, players_tracked, total_blocks, mean_ratio, percentile, percentile_ratio, recommended_threshold) " +
+            "VALUES (?,?,?,?,?,?,?)";
+
+    // D1 — Alert history persistence.
+    private static final String CREATE_ALERTS_TABLE =
+            "CREATE TABLE IF NOT EXISTS medusa_alerts (" +
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+            "uuid VARCHAR(36) NOT NULL, " +
+            "player_name VARCHAR(32) NOT NULL, " +
+            "timestamp BIGINT NOT NULL, " +
+            "tier VARCHAR(16) NOT NULL, " +
+            "ratio DOUBLE NOT NULL, " +
+            "score DOUBLE NOT NULL, " +
+            "total_blocks INTEGER NOT NULL, " +
+            "world VARCHAR(64) NOT NULL)";
+    private static final String CREATE_ALERTS_INDEX =
+            "CREATE INDEX IF NOT EXISTS idx_medusa_alerts_uuid ON medusa_alerts(uuid)";
+    private static final String INSERT_ALERT =
+            "INSERT INTO medusa_alerts (uuid, player_name, timestamp, tier, ratio, score, total_blocks, world) " +
+            "VALUES (?,?,?,?,?,?,?,?)";
+    private static final String SELECT_ALERTS =
+            "SELECT timestamp, tier, ratio, score, total_blocks, world FROM medusa_alerts " +
+            "WHERE uuid = ? ORDER BY timestamp DESC LIMIT ?";
+    private static final String DELETE_ALERTS_EXPIRED =
+            "DELETE FROM medusa_alerts WHERE timestamp < ?";
+
     private final MedusaAntiXray plugin;
     private final ConfigManager config;
     private final ExecutorService executor;
@@ -121,6 +162,110 @@ public class DatabaseManager {
         return available;
     }
 
+    // =========================================================================
+    // D1 — Alert history
+    // =========================================================================
+
+    /**
+     * Immutable record representing a single persisted alert row from {@code medusa_alerts}.
+     *
+     * @param timestamp   epoch-millis when the alert fired
+     * @param tier        the alert tier label (e.g. {@code "WARNING"}, {@code "ALERT"}, {@code "CRITICAL"})
+     * @param ratio       the detection ratio at alert time
+     * @param score       the suspicion score at alert time
+     * @param totalBlocks total blocks mined in the window at alert time
+     * @param world       the world name where the detection occurred
+     */
+    public record AlertRecord(
+            long   timestamp,
+            String tier,
+            double ratio,
+            double score,
+            int    totalBlocks,
+            String world) {}
+
+    /**
+     * D1: Asynchronously inserts a dispatched alert into the {@code medusa_alerts} table.
+     * Silently skips when the database is unavailable.
+     */
+    public void insertAlertAsync(UUID uuid, String playerName, String tier,
+                                 double ratio, double score,
+                                 int totalBlocks, String world) {
+        if (!available) return;
+        executor.submit(() -> {
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement ps = conn.prepareStatement(INSERT_ALERT)) {
+                ps.setString(1, uuid.toString());
+                ps.setString(2, playerName);
+                ps.setLong(3,   System.currentTimeMillis());
+                ps.setString(4, tier);
+                ps.setDouble(5, ratio);
+                ps.setDouble(6, score);
+                ps.setInt(7,    totalBlocks);
+                ps.setString(8, world);
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().log(Level.WARNING,
+                        "[Medusa] Failed to persist alert for " + playerName + ".", e);
+            }
+        });
+    }
+
+    /**
+     * D1: Queries the most recent {@code limit} alert rows for the given player UUID.
+     * Runs <b>synchronously</b> on the calling thread; invoke from an async context.
+     *
+     * @param uuid  the player's UUID
+     * @param limit maximum rows to return (newest first)
+     * @return a list of {@link AlertRecord}; empty if the database is unavailable or has no rows
+     */
+    public List<AlertRecord> queryAlerts(UUID uuid, int limit) {
+        if (!available) return List.of();
+        List<AlertRecord> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(SELECT_ALERTS)) {
+            ps.setString(1, uuid.toString());
+            ps.setInt(2, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    results.add(new AlertRecord(
+                            rs.getLong(1),
+                            rs.getString(2),
+                            rs.getDouble(3),
+                            rs.getDouble(4),
+                            rs.getInt(5),
+                            rs.getString(6)));
+                }
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().log(Level.WARNING,
+                    "[Medusa] Failed to query alerts for " + uuid + ".", e);
+        }
+        return results;
+    }
+
+    /**
+     * D1: Deletes alert rows older than {@code cutoffMs} epoch-millis.
+     * Intended to be scheduled asynchronously once per day.
+     */
+    public void purgeAlertsOlderThan(long cutoffMs) {
+        if (!available) return;
+        executor.submit(() -> {
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement ps = conn.prepareStatement(DELETE_ALERTS_EXPIRED)) {
+                ps.setLong(1, cutoffMs);
+                int deleted = ps.executeUpdate();
+                if (deleted > 0) {
+                    plugin.getLogger().info("[Medusa] Alert retention: removed " + deleted
+                            + " alert row(s) older than " + cutoffMs + " ms.");
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().log(Level.WARNING,
+                        "[Medusa] Failed to run alert retention purge.", e);
+            }
+        });
+    }
+
     private HikariDataSource buildDataSource() {
         HikariConfig hc = new HikariConfig();
         String type = config.getDatabaseType();
@@ -154,6 +299,10 @@ public class DatabaseManager {
              Statement statement = connection.createStatement()) {
             statement.executeUpdate(CREATE_TABLE);
             statement.executeUpdate(CREATE_INDEX);
+            statement.executeUpdate(CREATE_CALIBRATION_TABLE);
+            statement.executeUpdate(CREATE_CALIBRATION_INDEX);
+            statement.executeUpdate(CREATE_ALERTS_TABLE);
+            statement.executeUpdate(CREATE_ALERTS_INDEX);
         }
     }
 
@@ -189,6 +338,32 @@ public class DatabaseManager {
                 if (onComplete != null) {
                     onComplete.run();
                 }
+            }
+        });
+    }
+
+    /**
+     * C3: Persists a completed calibration result into the {@code medusa_calibration} table.
+     * Runs on the existing single-thread executor — safe to call from any thread.
+     */
+    public void saveCalibrationResultAsync(long timestamp, int playersTracked, long totalBlocks,
+                                           double meanRatio, int percentile,
+                                           double percentileRatio, double recommended) {
+        if (!available) return;
+        executor.submit(() -> {
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement ps = conn.prepareStatement(INSERT_CALIBRATION)) {
+                ps.setLong(1,   timestamp);
+                ps.setInt(2,    playersTracked);
+                ps.setLong(3,   totalBlocks);
+                ps.setDouble(4, meanRatio);
+                ps.setInt(5,    percentile);
+                ps.setDouble(6, percentileRatio);
+                ps.setDouble(7, recommended);
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().log(Level.WARNING,
+                        "[Medusa] Failed to persist calibration result.", e);
             }
         });
     }

@@ -1,7 +1,7 @@
 # =============================================
 #   Medusa-Anti-Xray Configuration
 #   Author: PerseusJ | API: 1.20+
-#   Version: 1.3.0
+#   Version: 1.4.0
 # =============================================
 
 detection:
@@ -215,11 +215,96 @@ alerts:
   # Message prefix (supports & color codes and hex #RRGGBB)
   prefix: "&8[&4Medusa&8]&r"
 
-  # Alert message placeholders: {player}, {ratio}, {score}, {total}
+  # Legacy alert message (used as default for the 'alert' tier below)
   alert-message: "{prefix} &c⚠ {player} &7may be X-raying! &cRatio: &f{ratio}% &7({score} pts / {total} blocks)"
 
   # Message sent to /medusa check executor
   check-message: "&7Player &f{player} &7| Score: &c{score} &7| Total: &f{total} &7| Ratio: &c{ratio}% &7| Window: &f{window}m"
+
+  # ---------------------------------------------------------------------------
+  # D1 — Alert history persistence
+  # ---------------------------------------------------------------------------
+  persist-history: true
+  # Days to keep alert history (0 = keep forever)
+  history-retention-days: 90
+
+  # ---------------------------------------------------------------------------
+  # D2 — Escalation tiers
+  # Three tiers, evaluated from highest to lowest. The highest matching tier wins.
+  # ---------------------------------------------------------------------------
+  tiers:
+    warning:
+      threshold: 0.06
+      permission: "medusa.staff"
+      message: "{prefix} &e⚠ {player} &7shows unusual mining — Ratio: &e{ratio}% &7({score} pts / {total} blocks)"
+      sound: BLOCK_NOTE_BLOCK_BELL
+      volume: 0.5
+      pitch: 1.0
+    alert:
+      threshold: 0.08
+      permission: "medusa.staff"
+      message: "{prefix} &c⚠ {player} &7may be X-raying! &cRatio: &f{ratio}% &7({score} pts / {total} blocks)"
+      sound: BLOCK_NOTE_BLOCK_PLING
+      volume: 1.0
+      pitch: 1.0
+    critical:
+      threshold: 0.25
+      permission: "medusa.staff"
+      message: "{prefix} &4&l⚠ CRITICAL: {player} &7has extreme ratio! &4Ratio: &f{ratio}% &7({score} pts / {total} blocks)"
+      sound: ENTITY_WITHER_SPAWN
+      volume: 1.0
+      pitch: 1.0
+
+  # ---------------------------------------------------------------------------
+  # D3 — Clickable chat components
+  # When enabled, alert messages include a clickable [TP] button (requires Paper).
+  # Set enabled: false to fall back to plain text (backward compatible).
+  # ---------------------------------------------------------------------------
+  clickable-components:
+    enabled: true
+    tp-command: "/tp {player}"
+    tp-hover-text: "&7Click to teleport to &f{player}"
+    check-hover-text: "&7Click for detailed stats"
+
+  # ---------------------------------------------------------------------------
+  # D4 — Webhook notifications (Discord & Slack)
+  # Leave URLs empty to disable individual targets.
+  # tiers: only these tier names fire webhooks (lowercase).
+  # ---------------------------------------------------------------------------
+  webhooks:
+    enabled: false
+    tiers:
+      - alert
+      - critical
+    discord-url: ""
+    slack-url: ""
+
+  # ---------------------------------------------------------------------------
+  # D5 — Alert delivery modes
+  # Each mode is independently toggleable. Sounds use per-tier config above.
+  # ---------------------------------------------------------------------------
+  alert-modes:
+    chat: true          # Send a chat message
+    sound: true         # Play a sound effect
+    title: false        # Show a title/subtitle overlay
+    title-fade-in-ticks: 10
+    title-stay-ticks: 70
+    title-fade-out-ticks: 20
+    boss-bar: false     # Show a boss bar (auto-removed after boss-bar-seconds)
+    boss-bar-color: RED # PINK, BLUE, RED, GREEN, YELLOW, PURPLE, WHITE
+    boss-bar-seconds: 5
+
+  # ---------------------------------------------------------------------------
+  # D6 — Periodic digest reports
+  # Broadcasts a top-N summary of the most suspicious players at a fixed interval.
+  # ---------------------------------------------------------------------------
+  digest:
+    enabled: false
+    interval-minutes: 15
+    top-n: 5
+    min-ratio: 0.04    # Exclude players below this ratio from the digest
+    message: "{prefix} &7Top {n} suspects:\n{entries}"
+    entry-format: "  &c{player} &7— Ratio: &c{ratio}% &7({score} pts / {total} blocks)"
 
 false-positive-guards:
   # C1 — Seconds to exempt a player from detection after teleporting
