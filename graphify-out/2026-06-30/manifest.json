@@ -15,8 +15,8 @@
     "semantic_hash": "32b67963417a30cb80544e0b2a56a98d"
   },
   "src/main/java/me/perseusj/medusaantixray/MedusaAntiXray.java": {
-    "mtime": 1782841341.5059657,
-    "ast_hash": "a659bce235cacd4c10f843ee862042e7",
+    "mtime": 1782842304.666846,
+    "ast_hash": "08ce0ac53d2ef20a71bfee49191798bb",
     "semantic_hash": ""
   },
   "src/main/java/me/perseusj/medusaantixray/commands/MedusaCommand.java": {
@@ -35,8 +35,8 @@
     "semantic_hash": ""
   },
   "src/main/java/me/perseusj/medusaantixray/listeners/BlockBreakListener.java": {
-    "mtime": 1782615835.46373,
-    "ast_hash": "ba549b9fc33f59184b46670de1bbce41",
+    "mtime": 1782842284.117314,
+    "ast_hash": "33775e788fb75d8f6025d7708b43c7cd",
     "semantic_hash": ""
   },
   "src/main/java/me/perseusj/medusaantixray/listeners/SessionListener.java": {
@@ -45,13 +45,13 @@
     "semantic_hash": ""
   },
   "src/main/java/me/perseusj/medusaantixray/managers/AlertManager.java": {
-    "mtime": 1781979204.5819738,
-    "ast_hash": "4436decf1f31ac675fde0cf648c9ccae",
-    "semantic_hash": "4436decf1f31ac675fde0cf648c9ccae"
+    "mtime": 1782842246.7373185,
+    "ast_hash": "b0c9dd9f56923dd479ac6f755cd77e85",
+    "semantic_hash": ""
   },
   "src/main/java/me/perseusj/medusaantixray/managers/ConfigManager.java": {
-    "mtime": 1782841353.4080973,
-    "ast_hash": "291f83d080bf5c3836799daf3f440edf",
+    "mtime": 1782842447.5012875,
+    "ast_hash": "96feffa794a2c84b9db2d4c094e96c34",
     "semantic_hash": ""
   },
   "src/main/java/me/perseusj/medusaantixray/managers/DataManager.java": {
@@ -75,13 +75,13 @@
     "semantic_hash": "637776aa6f7496d069afe7520c845c8a"
   },
   "src/main/resources/config.yml": {
-    "mtime": 1782615785.1313226,
-    "ast_hash": "688f4c74884041126b4e8c35b0573df6",
+    "mtime": 1782842337.9048994,
+    "ast_hash": "25dfd0a8402e2a18bd0e9f64ace266f4",
     "semantic_hash": ""
   },
   "src/main/resources/plugin.yml": {
-    "mtime": 1782615781.350286,
-    "ast_hash": "33fb07bb08df9abbbb880509030d08a2",
+    "mtime": 1782842352.247295,
+    "ast_hash": "e59c54e06101daee792975667734791f",
     "semantic_hash": ""
   },
   "src/main/java/me/perseusj/medusaantixray/data/OreWeight.java": {
@@ -95,8 +95,8 @@
     "semantic_hash": "cdc4dea050c71debf637af8422bfc192"
   },
   "src/main/java/me/perseusj/medusaantixray/managers/DatabaseManager.java": {
-    "mtime": 1782841309.4480104,
-    "ast_hash": "e3196a5fb9e99e873c53b5ff80e77e88",
+    "mtime": 1782842111.094291,
+    "ast_hash": "a0875096894141ec35cf4437ddc10d55",
     "semantic_hash": ""
   },
   "src/test/java/me/perseusj/medusaantixray/data/PlayerDataTest.java": {
@@ -105,13 +105,23 @@
     "semantic_hash": ""
   },
   "docs/ROADMAP.md": {
-    "mtime": 1782841381.948674,
-    "ast_hash": "e55a35a7dac20275a1b133db21d44152",
+    "mtime": 1782842475.577847,
+    "ast_hash": "e6d1b9d7922c2ef4651839c3e00e4e2b",
     "semantic_hash": ""
   },
   "src/main/java/me/perseusj/medusaantixray/managers/CalibrationManager.java": {
     "mtime": 1782841333.0624835,
     "ast_hash": "bd47d165303f58b260db6cbd7619537f",
+    "semantic_hash": ""
+  },
+  "src/main/java/me/perseusj/medusaantixray/managers/AlertTier.java": {
+    "mtime": 1782842049.535106,
+    "ast_hash": "a2d4af9f4a60df3b58ec96f6e8e5e9b7",
+    "semantic_hash": ""
+  },
+  "src/main/java/me/perseusj/medusaantixray/notifications/WebhookManager.java": {
+    "mtime": 1782842076.1721315,
+    "ast_hash": "3e5dca68ac338177e7af02af338ac4bb",
     "semantic_hash": ""
   }
 }
