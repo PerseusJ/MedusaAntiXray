@@ -10,6 +10,9 @@ import me.perseusj.medusaantixray.managers.ConfigManager;
 import me.perseusj.medusaantixray.managers.DataManager;
 import me.perseusj.medusaantixray.managers.AlertManager;
 import me.perseusj.medusaantixray.managers.DatabaseManager;
+import me.perseusj.medusaantixray.managers.WatchManager;
+import me.perseusj.medusaantixray.ui.GuiListener;
+import me.perseusj.medusaantixray.ui.MedusaGui;
 
 public class MedusaAntiXray extends JavaPlugin {
 
@@ -18,6 +21,7 @@ public class MedusaAntiXray extends JavaPlugin {
     private DataManager dataManager;
     private AlertManager alertManager;
     private CalibrationManager calibrationManager;
+    private WatchManager watchManager;
 
     @Override
     public void onEnable() {
@@ -36,9 +40,14 @@ public class MedusaAntiXray extends JavaPlugin {
         calibrationManager = new CalibrationManager(configManager, getLogger(), databaseManager);
 
         getServer().getPluginManager().registerEvents(new SessionListener(dataManager, configManager), this);
-        getServer().getPluginManager().registerEvents(new BlockBreakListener(this, configManager, dataManager, alertManager, calibrationManager), this);
+        watchManager = new WatchManager();
 
-        MedusaCommand command = new MedusaCommand(configManager, dataManager);
+        getServer().getPluginManager().registerEvents(new BlockBreakListener(this, configManager, dataManager, alertManager, calibrationManager, watchManager), this);
+
+        MedusaGui gui = new MedusaGui(configManager, dataManager);
+        getServer().getPluginManager().registerEvents(new GuiListener(gui, dataManager), this);
+
+        MedusaCommand command = new MedusaCommand(configManager, dataManager, watchManager, gui);
         getCommand("medusa").setExecutor(command);
         getCommand("medusa").setTabCompleter(command);
 

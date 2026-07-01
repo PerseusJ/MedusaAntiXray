@@ -147,6 +147,21 @@ public class PlayerData {
         return new ArrayList<>(eventWindow);
     }
 
+    /**
+     * E1 — Clears all in-memory event data. Used by {@code /medusa reset}.
+     * The PlayerData stub remains usable; a fresh window can accumulate from here.
+     */
+    public synchronized void reset() {
+        eventWindow.clear();
+        currentScore = 0;
+        currentBlocks = 0;
+        lastAlertTimestamp = 0;
+        lastOreTimestamp = 0;
+        lastTeleportTimestamp = 0;
+        blocksSinceLastClassification = 0;
+        miningStyle = MiningStyle.UNKNOWN;
+    }
+
     public synchronized boolean shouldAlert(long now, long cooldownMillis) {
         if (lastAlertTimestamp != 0 && (now - lastAlertTimestamp) < cooldownMillis) {
             return false;

@@ -9,6 +9,7 @@ import me.perseusj.medusaantixray.managers.AlertTier;
 import me.perseusj.medusaantixray.managers.CalibrationManager;
 import me.perseusj.medusaantixray.managers.ConfigManager;
 import me.perseusj.medusaantixray.managers.DataManager;
+import me.perseusj.medusaantixray.managers.WatchManager;
 import org.bukkit.GameMode;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
@@ -43,6 +44,7 @@ public class BlockBreakListener implements Listener {
     private final DataManager dataManager;
     private final AlertManager alertManager;
     private final CalibrationManager calibrationManager;
+    private final WatchManager watchManager;
 
     /**
      * B2: Per-player ore-vein tracking context.
@@ -52,12 +54,14 @@ public class BlockBreakListener implements Listener {
 
     public BlockBreakListener(JavaPlugin plugin, ConfigManager config,
                               DataManager dataManager, AlertManager alertManager,
-                              CalibrationManager calibrationManager) {
+                              CalibrationManager calibrationManager,
+                              WatchManager watchManager) {
         this.plugin       = plugin;
         this.config       = config;
         this.dataManager  = dataManager;
         this.alertManager = alertManager;
         this.calibrationManager = calibrationManager;
+        this.watchManager = watchManager;
     }
 
     // =========================================================================
@@ -244,9 +248,15 @@ public class BlockBreakListener implements Listener {
                 data.setLastOreTimestamp(now);
             }
 
-            data.addEvent(new MineEvent(now, finalIsValuable, effectiveWeight,
+            MineEvent mineEvent = new MineEvent(now, finalIsValuable, effectiveWeight,
                     blockY, veinSizeForEvent,
-                    hasSilkTouch, fortuneLevel, efficiencyLevel, toolType));
+                    hasSilkTouch, fortuneLevel, efficiencyLevel, toolType);
+            data.addEvent(mineEvent);
+
+            // E1: Notify watchers of the live event.
+            if (watchManager.isWatched(playerUuid)) {
+                watchManager.notifyWatchers(playerUuid, player.getName(), mineEvent);
+            }
 
             // C3: Record event in calibration manager (in learning mode, captures all data).
             calibrationManager.recordEvent(player.getUniqueId(), finalIsValuable, effectiveWeight);

@@ -82,6 +82,11 @@ public class DatabaseManager {
             "WHERE uuid = ? ORDER BY timestamp DESC LIMIT ?";
     private static final String DELETE_ALERTS_EXPIRED =
             "DELETE FROM medusa_alerts WHERE timestamp < ?";
+    private static final String COUNT_ALERTS_TODAY =
+            "SELECT COUNT(*) FROM medusa_alerts WHERE timestamp >= ?";
+    private static final String SELECT_ALERTS_PAGED =
+            "SELECT timestamp, tier, ratio, score, total_blocks, world FROM medusa_alerts " +
+            "WHERE uuid = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?";
 
     private final MedusaAntiXray plugin;
     private final ConfigManager config;
@@ -245,6 +250,59 @@ public class DatabaseManager {
     }
 
     /**
+     * E1: Counts alerts dispatched in the last 24 hours for the stats command.
+     * Runs synchronously — call from the DB executor.
+     */
+    public int countAlertsToday() {
+        if (!available) return 0;
+        long cutoff = System.currentTimeMillis() - (24L * 60 * 60 * 1000);
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(COUNT_ALERTS_TODAY)) {
+            ps.setLong(1, cutoff);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) return rs.getInt(1);
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().log(Level.WARNING, "[Medusa] Failed to count alerts.", e);
+        }
+        return 0;
+    }
+
+    /**
+     * E1: Queries alert history for a player with pagination support.
+     * Runs synchronously — invoke from an async context.
+     */
+    public List<AlertRecord> queryAlertsPaged(UUID uuid, int limit, int offset) {
+        if (!available) return List.of();
+        List<AlertRecord> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(SELECT_ALERTS_PAGED)) {
+            ps.setString(1, uuid.toString());
+            ps.setInt(2, limit);
+            ps.setInt(3, offset);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    results.add(new AlertRecord(
+                            rs.getLong(1), rs.getString(2),
+                            rs.getDouble(3), rs.getDouble(4),
+                            rs.getInt(5), rs.getString(6)));
+                }
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().log(Level.WARNING, "[Medusa] Failed to query paged alerts.", e);
+        }
+        return results;
+    }
+
+    /**
+     * E1: Loads all alert rows for a player UUID so the command layer can paginate in memory.
+     * Intended for moderate result sets; for very large histories prefer async paging.
+     */
+    public List<AlertRecord> queryAllAlerts(UUID uuid) {
+        return queryAlerts(uuid, 10_000);
+    }
+
+    /**
      * D1: Deletes alert rows older than {@code cutoffMs} epoch-millis.
      * Intended to be scheduled asynchronously once per day.
      */
@@ -316,6 +374,28 @@ public class DatabaseManager {
                 callback.accept(events);
             } catch (Throwable t) {
                 plugin.getLogger().log(Level.WARNING, "Error processing loaded data for " + uuid, t);
+            }
+        });
+    }
+
+    /**
+     * E1: Asynchronously deletes all {@code medusa_events} rows for the given UUID.
+     * Used by {@code /medusa reset} to clear persisted detection data.
+     */
+    public void deleteEventsAsync(UUID uuid) {
+        if (!available) return;
+        executor.submit(() -> {
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement ps = conn.prepareStatement(DELETE_EVENTS)) {
+                ps.setString(1, uuid.toString());
+                int deleted = ps.executeUpdate();
+                if (deleted > 0) {
+                    plugin.getLogger().info("[Medusa] Reset: removed " + deleted
+                            + " event row(s) for " + uuid + ".");
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().log(Level.WARNING,
+                        "[Medusa] Failed to delete events for " + uuid + " during reset.", e);
             }
         });
     }

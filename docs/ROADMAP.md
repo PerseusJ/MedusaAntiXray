@@ -1084,7 +1084,7 @@ alerts:
 
 ---
 
-## Phase E — v1.6: Commands & UX
+## Phase E — v1.6: Commands & UX [COMPLETED]
 
 *Expanding the command interface and adding quality-of-life tooling for staff.*
 

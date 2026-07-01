@@ -4,6 +4,7 @@ import me.perseusj.medusaantixray.data.PlayerData;
 
 import java.util.Collection;
 import java.util.Collections;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -25,6 +26,10 @@ public class DataManager {
         this.database = database;
         this.config = config;
         this.loadingInFlight = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    }
+
+    public DatabaseManager getDatabase() {
+        return database;
     }
 
     public void createEntry(UUID uuid, String name) {
@@ -89,6 +94,52 @@ public class DataManager {
                 database.saveAsync(data, null);
             }
         }
+    }
+
+    /**
+     * E1: Returns the top-N players by ratio, filtered to those above the alert threshold
+     * and with enough blocks to meet the minimum sample size.
+     */
+    public List<PlayerData> getTopN(int n, double minRatio, int minBlocks) {
+        long cutoff = System.currentTimeMillis() - (config.getWindowMinutes() * 60_000L);
+        return cache.values().stream()
+                .filter(p -> {
+                    p.purgeExpired(cutoff);
+                    return p.getTotalBlocks() >= minBlocks && p.calculateRatio() >= minRatio;
+                })
+                .sorted(java.util.Comparator.comparingDouble(PlayerData::calculateRatio).reversed())
+                .limit(n)
+                .toList();
+    }
+
+    /**
+     * E1: Clears all in-memory event data for a player and deletes their DB rows.
+     * The empty PlayerData stub remains in cache so a new window can accumulate.
+     */
+    public void resetPlayer(PlayerData data) {
+        UUID uuid = data.getPlayerUuid();
+        synchronized (data) {
+            data.reset();
+        }
+        loadingInFlight.remove(uuid);
+        if (database.isAvailable()) {
+            database.deleteEventsAsync(uuid);
+        }
+    }
+
+    /**
+     * E1: Returns all cached players whose ratio is at or above the given threshold
+     * (after purging expired events from their windows).
+     */
+    public List<PlayerData> getFlagged(double threshold, int minBlocks) {
+        long cutoff = System.currentTimeMillis() - (config.getWindowMinutes() * 60_000L);
+        return cache.values().stream()
+                .filter(p -> {
+                    p.purgeExpired(cutoff);
+                    return p.getTotalBlocks() >= minBlocks && p.calculateRatio() >= threshold;
+                })
+                .sorted(java.util.Comparator.comparingDouble(PlayerData::calculateRatio).reversed())
+                .toList();
     }
 
     public void shutdown() {

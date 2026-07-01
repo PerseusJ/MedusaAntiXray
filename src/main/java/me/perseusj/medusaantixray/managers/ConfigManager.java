@@ -20,7 +20,7 @@ public class ConfigManager {
     /** All top-level keys present in the default config.yml. */
     private static final Set<String> KNOWN_TOP_LEVEL_KEYS =
             Set.of("detection", "worlds", "alerts", "messages", "database",
-                    "false-positive-guards", "trust", "learning-mode");
+                    "false-positive-guards", "trust", "learning-mode", "commands", "gui");
 
     // -------------------------------------------------------------------------
     // B1: Depth-normalization helper record (package-private for tests if needed)
@@ -477,6 +477,50 @@ public class ConfigManager {
     public String getReloadSuccessMessage()  { return config.getString("messages.reload-success", "&aConfiguration reloaded successfully."); }
     public String getPlayerNotFoundMessage() { return config.getString("messages.player-not-found", "&cPlayer &f{player} &cnot found or has no data."); }
     public String getUsageCheckMessage()     { return config.getString("messages.usage-check", "&cUsage: /medusa check <player>"); }
+
+    // E1 — New message templates
+    public String getTopHeaderMessage()      { return config.getString("messages.top-header",
+            "&7=== Top Suspects (Page {page}/{totalPages}) ==="); }
+    public String getTopEntryMessage()       { return config.getString("messages.top-entry",
+            "&c#{rank} {player} &7| Ratio: &c{ratio}% &7| Score: &f{score} &7| Blocks: &f{total}"); }
+    public String getTopNoResultsMessage()   { return config.getString("messages.top-no-results",
+            "&7No flagged players."); }
+    public String getHistoryHeaderMessage()  { return config.getString("messages.history-header",
+            "&7Alert history for &f{player} &7(page {page}/{totalPages}):"); }
+    public String getHistoryEntryMessage()   { return config.getString("messages.history-entry",
+            "&7{timestamp} &c{tier} &7Ratio: &c{ratio}% &7Score: &f{score}"); }
+    public String getHistoryEmptyMessage()   { return config.getString("messages.history-empty",
+            "&7No alert history for &f{player}."); }
+    public String getResetSuccessMessage()   { return config.getString("messages.reset-success",
+            "&aDetection data for &f{player} &ahas been reset."); }
+    public String getResetConfirmMessage()   { return config.getString("messages.reset-confirm",
+            "&eUse &c/medusa reset {player} confirm &eto proceed."); }
+    public String getStatsMessage()          { return config.getString("messages.stats-message",
+            "&7Tracked: &f{tracked} &7| Flagged: &c{flagged} &7| Alerts today: &c{alertsToday}"); }
+    public String getWatchEnabledMessage()   { return config.getString("messages.watch-enabled",
+            "&aNow watching &f{player}&a. Live updates enabled."); }
+    public String getWatchDisabledMessage()  { return config.getString("messages.watch-disabled",
+            "&7Stopped watching &f{player}&7."); }
+    public String getHelpHeaderMessage()     { return config.getString("messages.help-header",
+            "&7=== Medusa Anti-Xray Help ==="); }
+    public String getListEntryMessage()      { return config.getString("messages.list-entry",
+            "&c{player} &7| Ratio: &c{ratio}% &7| Score: &f{score}"); }
+    public String getListHeaderMessage()     { return config.getString("messages.list-header",
+            "&7=== Flagged Players (Page {page}/{totalPages}) ==="); }
+    public String getListEmptyMessage()      { return config.getString("messages.list-empty",
+            "&7No flagged players currently online or cached."); }
+    public String getResetNoConfirmMessage() { return config.getString("messages.reset-no-confirm",
+            "&cWarning &7| &f{player} &7| Ratio: &c{ratio}% &7| Score: &f{score} &7| Blocks: &f{total}"); }
+    public String getUsageMessage()          { return config.getString("messages.usage",
+            "&cUsage: /medusa <reload|check|trust|top|history|reset|stats|watch|list|gui|help>"); }
+
+    // E2 — Command settings
+    public int getPageSize()                 { return config.getInt("commands.page-size", 10); }
+    // E3 — GUI settings
+    public boolean isGuiEnabled()            { return config.getBoolean("gui.enabled", true); }
+    public String  getGuiTitle()             { return config.getString("gui.title", "Medusa \u2014 Suspects"); }
+    public int     getGuiPageSize()          { return config.getInt("gui.page-size", 45); }
+    public List<String> getGuiSkullLore()    { return config.getStringList("gui.skull-lore"); }
 
     // =========================================================================
     // Database settings

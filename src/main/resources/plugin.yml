@@ -7,7 +7,7 @@ api-version: '1.20'
 commands:
   medusa:
     description: Medusa Anti-Xray management command
-    usage: /medusa <reload|check|trust>
+    usage: /medusa <reload|check|trust|top|history|reset|stats|watch|list|gui|help>
     permission: medusa.admin
 
 permissions:

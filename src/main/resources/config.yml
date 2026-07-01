@@ -346,6 +346,30 @@ messages:
   reload-success: "&aConfiguration reloaded successfully."
   player-not-found: "&cPlayer &f{player} &cnot found or has no data."
   usage-check: "&cUsage: /medusa check <player>"
+  usage: "&cUsage: /medusa <reload|check|trust|top|history|reset|stats|watch|list|gui|help>"
+
+  # E1 — New subcommand message templates
+  top-header: "&7=== Top Suspects (Page {page}/{totalPages}) ==="
+  top-entry: "&c#{rank} {player} &7| Ratio: &c{ratio}% &7| Score: &f{score} &7| Blocks: &f{total}"
+  top-no-results: "&7No flagged players."
+  history-header: "&7Alert history for &f{player} &7(page {page}/{totalPages}):"
+  history-entry: "&7{timestamp} &c{tier} &7Ratio: &c{ratio}% &7Score: &f{score}"
+  history-empty: "&7No alert history for &f{player}."
+  reset-success: "&aDetection data for &f{player} &ahas been reset."
+  reset-confirm: "&eUse &c/medusa reset {player} confirm &eto proceed."
+  reset-no-confirm: "&cWarning &7| &f{player} &7| Ratio: &c{ratio}% &7| Score: &f{score} &7| Blocks: &f{total}"
+  stats-message: "&7Tracked: &f{tracked} &7| Flagged: &c{flagged} &7| Alerts today: &c{alertsToday}"
+  watch-enabled: "&aNow watching &f{player}&a. Live updates enabled."
+  watch-disabled: "&7Stopped watching &f{player}&7."
+  help-header: "&7=== Medusa Anti-Xray Help ==="
+  list-header: "&7=== Flagged Players (Page {page}/{totalPages}) ==="
+  list-entry: "&c{player} &7| Ratio: &c{ratio}% &7| Score: &f{score}"
+  list-empty: "&7No flagged players currently online or cached."
+
+# E2 — Command pagination
+commands:
+  # Number of entries per page for /medusa top, history, and list output.
+  page-size: 10
 
 database:
   # Database type: sqlite or mysql
@@ -373,3 +397,18 @@ database:
   # Seconds between reconnection attempts when the database is unavailable (0 = never retry).
   # Once reconnected, full persistence resumes automatically.
   retry-interval-seconds: 120
+
+# E3 — Optional inventory-based GUI dashboard
+# A chest-inventory menu listing flagged players with skull icons and click actions.
+gui:
+  enabled: true
+  title: "Medusa — Suspects"
+  page-size: 45   # 5 rows of 9
+  skull-lore:
+    - "&7Ratio: &c{ratio}%"
+    - "&7Score: &f{score}"
+    - "&7Blocks: &f{total}"
+    - ""
+    - "&eLeft-click &7→ Teleport"
+    - "&eRight-click &7→ History"
+    - "&eShift-click &7→ Reset"
